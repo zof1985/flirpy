@@ -5,6 +5,7 @@ from IR16Filters import IR16Capture, NewBytesFrameEvent
 
 # additional imports
 from collections import deque
+from time import sleep
 from threading import Thread
 from datetime import datetime, timedelta
 import numpy as np
@@ -36,9 +37,8 @@ class Lepton:
     _recording = False
     _shape = (120, 120)
     _sampling_frequency = 8.7
-    _read_thread = None
-    _n_frames = None
-    _time = None
+    _start_at = None
+    _stop_at = None
 
     # constructor
     def __init__(self, sampling_frequency=8.7, shape=(120, 120), gain_mode="HIGH"):
@@ -195,32 +195,37 @@ class Lepton:
         """
         self._recording = True
         self._buffer.clear()
-        self._n_frames = n_frames
-        self._time = time
 
         # adjust the n_frames to the sampling frequency
-        if self._time is None and self._n_frames is not None:
-            time = self._n_frames / self._sampling_frequency
+        if time is None and n_frames is not None:
+            time = n_frames / self._sampling_frequency
 
         # start reading data
         self._capture.RunGraph()
         while len(self._buffer) == 0:
             pass
-        tic = datetime.now()
+        self._start_at = datetime.now()
 
         # continue reading until a stopping criterion is met
-        toc = datetime.now()
-        while self.is_recording():
-            toc = datetime.now()
-            time_delta = (toc - tic).total_seconds()
-            if time is not None and time_delta >= time:
-                self._recording = False
-        self._capture.StopGraph()
+        if time is not None:
 
-    def parse_data(self):
+            def stop_reading(time):
+                sleep(time)
+                self.stop()
+
+            t = Thread(target=stop_reading, args=[time])
+            t.run()
+
+    def _parse_data(self):
+        """
+        parse the collected data to obtain readable images and timestamps
+        """
+
         # extract the samples according to the selected sampling frequency
         n = len(self._buffer)
-        time_array = np.linspace(tic.timestamp(), toc.timestamp(), n)
+        tic = self._start_at.timestamp()
+        toc = self._stop_at.timestamp()
+        time_array = np.linspace(tic, toc, n)
         time_array = [datetime.fromtimestamp(i) for i in time_array]
         dt = 1.0 / self._sampling_frequency
         sec = int(dt // 1)
@@ -233,62 +238,39 @@ class Lepton:
             while i < len(time_array) and time_array[i] < t:
                 i += 1
             if i < len(time_array):
-                img = self._parse_image(self._buffer[i])
+
+                # adjust the output shape
+                h, w, f = self._buffer[i]
+                img = np.fromiter(f, dtype="uint16").reshape(h, w)
+                y_off = max(h - self._shape[0], 0) // 2
+                y_idx = np.arange(y_off, y_off + self._shape[0])
+                x_off = max(w - self._shape[1], 0) // 2
+                x_idx = np.arange(x_off, x_off + self._shape[1])
+                img = img[y_idx, :][:, x_idx]
+
+                # the image is in centikelvin. Therefore convert it to celsius units
+                img = (img - 27315.0) / 100.0
+
+                # return the data
                 tm = time_array[i]
                 self._data[tm] = img
-
-    def read(self, n_frames=None, time=None):
-        """
-        read a series of frames from the camera.
-
-        Parameters
-        ----------
-        n_frames: None / int
-            if a positive int is provided, n_frames are captured.
-            Otherwise, all the frames collected are saved until the
-            stop command is given.
-
-        time: None / int
-            if a positive int is provided, data is sampled for the indicated
-            amount of seconds.
-        """
-        self._read_thread = Thread(
-            target=self._read_fun, kwargs={"n_frames": n_frames, "time": time}
-        )
-        self._read_thread.run()
 
     def stop(self):
         """
         stop reading from camera.
         """
-        self._recording = False
+        if self.is_recording():
+            self._capture.StopGraph()
+            self._stop_at = datetime.now()
+            self._recording = False
+            self._parse_data()
 
-    def _parse_image(self, img):
+    def clear(self):
         """
-        parse an image according to the required shape.
-
-        Parameters
-        ----------
-        img: tuple
-            a tuple containing:
-            height, width, and data of the image.
-
-        Returns
-        -------
-        parsed: a numpy 2D array of float with shape = input_shape
+        clear the current object memory and buffer
         """
-
-        # adjust the output shape
-        h, w, f = img
-        img = np.fromiter(f, dtype="uint16").reshape(h, w)
-        y_off = max(h - self._shape[0], 0) // 2
-        y_idx = np.arange(y_off, y_off + self._shape[0])
-        x_off = max(w - self._shape[1], 0) // 2
-        x_idx = np.arange(x_off, x_off + self._shape[1])
-        out = img[y_idx, :][:, x_idx]
-
-        # the image is in centikelvin. Therefore convert it to celsius units
-        return (out - 27315.0) / 100.0
+        self._data = {}
+        self._buffer.clear()
 
     def to_dict(self):
         return self._data
@@ -320,41 +302,3 @@ class Lepton:
         """
         timestamps, images = self.to_numpy()
         np.savez(filename, timestamps=timestamps, images=images)
-
-    '''
-    def to_clip(self, filename, codec="mp4v"):
-        """
-        store the recorded videoclip.
-
-        Parameters
-        ----------
-        filename: str
-            a valid filename path
-
-        codec: str
-            a supported codec
-        """
-
-        # initialize the writer
-        out = cv2.VideoWriter(
-            filename,
-            cv2.VideoWriter_fourcc(*codec),
-            self._sampling_frequency,
-            self._shape,
-            False,
-        )
-
-        # get the images
-        imgs = self.to_numpy()[1]
-
-        # convert to grayscale
-        grys = (imgs - np.min(imgs)) / (np.max(imgs) - np.min(imgs))
-        grys = (grys * 255).astype(np.int16)
-
-        # flip the image up-down
-        for g in grys:
-            out.write(g)
-
-        # release the writer (i.e. write the file)
-        out.release()
-    '''
