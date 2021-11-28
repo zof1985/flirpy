@@ -319,7 +319,7 @@ class LeptonWidget(qtw.QWidget):
         button_layout.addWidget(self.rec_button)
         button_layout.addWidget(self.quit_button)
         button_pane = qtw.QWidget()
-        button_pane.setFixedHeight(50)
+        button_pane.setFixedHeight(100)
         button_pane.setLayout(button_layout)
 
         # temperatures label
@@ -335,7 +335,7 @@ class LeptonWidget(qtw.QWidget):
         data_layout.addWidget(self.max_data_label)
         data_layout.addWidget(self.fps_label)
         data_pane = qtw.QWidget()
-        data_pane.setFixedHeight(50)
+        data_pane.setFixedHeight(100)
         data_pane.setLayout(data_layout)
 
         # main layout
@@ -414,8 +414,8 @@ class LeptonWidget(qtw.QWidget):
             # resize preserving the aspect ratio
             # view_w = self.image_label.width()
             # view_h = self.image_label.height()
-            h = img.shape[0] * 4
-            w = img.shape[1] * 4
+            h = img.shape[0] * 5
+            w = img.shape[1] * 5
             resized_image = cv2.resize(gry, (w, h))
 
             # converto to heatmap
