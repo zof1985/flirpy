@@ -5,15 +5,15 @@ from IR16Filters import IR16Capture, NewBytesFrameEvent
 
 # python useful packages
 from threading import Thread
-from datetime import datetime, timedelta
+from datetime import datetime
 import numpy as np
 import json
 import os
 
 # GUI-related imports
-from PySide2.QtCore import *
-from PySide2.QtGui import *
-from PySide2.QtWidgets import *
+import PySide2.QtWidgets as qtw
+import PySide2.QtCore as qtc
+import PySide2.QtGui as qtg
 import qimage2ndarray
 import cv2
 
@@ -288,7 +288,7 @@ class LeptonCamera:
             json.dump(self.to_dict(), buf)
 
 
-class LeptonWidget(QWidget):
+class LeptonWidget(qtw.QWidget):
     """
     Initialize a Widget capable of visualizing videos sampled from
     an external device.
@@ -305,48 +305,49 @@ class LeptonWidget(QWidget):
         self._camera.capture(save=False)
 
         # image label
-        self.image_label = QLabel()
+        self.image_label = qtw.QLabel()
         self.image_label.setMouseTracking(True)
         self.image_label.installEventFilter(self)
 
         # button bar with both recording and exit button
-        self.quit_button = QPushButton("QUIT")
+        self.quit_button = qtw.QPushButton("QUIT")
         self.quit_button.clicked.connect(self.close)
-        self.rec_button = QPushButton("● START RECORDING", self)
+        self.rec_button = qtw.QPushButton("● START RECORDING", self)
         self.rec_button.clicked.connect(self.record)
         self.rec_button.setCheckable(True)
-        button_layout = QHBoxLayout()
+        button_layout = qtw.QHBoxLayout()
         button_layout.addWidget(self.rec_button)
         button_layout.addWidget(self.quit_button)
-        button_pane = QWidget()
+        button_pane = qtw.QWidget()
         button_pane.setFixedHeight(50)
         button_pane.setLayout(button_layout)
 
         # temperatures label
-        self.mouse_data_label = QLabel("Pointer t:  °C")
-        self.mean_data_label = QLabel("Mean t:  °C")
-        self.max_data_label = QLabel("Max t:  °C")
-        self.min_data_label = QLabel("Min t:  °C")
-        self.fps_label = QLabel("fps:")
-        data_layout = QHBoxLayout()
+        self.mouse_data_label = qtw.QLabel("Pointer t:  °C")
+        self.mean_data_label = qtw.QLabel("Mean t:  °C")
+        self.max_data_label = qtw.QLabel("Max t:  °C")
+        self.min_data_label = qtw.QLabel("Min t:  °C")
+        self.fps_label = qtw.QLabel("fps:")
+        data_layout = qtw.QHBoxLayout()
         data_layout.addWidget(self.mouse_data_label)
         data_layout.addWidget(self.mean_data_label)
         data_layout.addWidget(self.min_data_label)
         data_layout.addWidget(self.max_data_label)
         data_layout.addWidget(self.fps_label)
-        data_pane = QWidget()
+        data_pane = qtw.QWidget()
         data_pane.setFixedHeight(50)
         data_pane.setLayout(data_layout)
 
         # main layout
-        self.main_layout = QVBoxLayout()
+        self.main_layout = qtw.QVBoxLayout()
         self.main_layout.addWidget(self.image_label)
         self.main_layout.addWidget(data_pane)
         self.main_layout.addWidget(button_pane)
         self.setLayout(self.main_layout)
+        self.setWindowTitle("LeptonWidget")
 
         # stream handler
-        self._timer = QTimer()
+        self._timer = qtc.QTimer()
         self._timer.timeout.connect(self.stream_video)
         self._timer.start(100)
 
@@ -374,7 +375,7 @@ class LeptonWidget(QWidget):
             self.fps_label.setText(fps_txt)
 
             # check if the pointer is on the image and update pointer temperature
-            if event.type() == QEvent.MouseMove:
+            if event.type() == qtc.QEvent.MouseMove:
 
                 # get the mouse coordinates
                 x, y = (event.x(), event.y())
@@ -390,7 +391,7 @@ class LeptonWidget(QWidget):
                 self.mouse_data_label.setText(txt)
 
             # the pointer leaves the image, therefore no temperature has to be shown
-            elif event.type() == QEvent.Leave:
+            elif event.type() == qtc.QEvent.Leave:
                 txt = "Pointer t:  °C"
                 self.mouse_data_label.setText(txt)
 
@@ -435,7 +436,7 @@ class LeptonWidget(QWidget):
 
             # update the view
             qimage = qimage2ndarray.array2qimage(heatmap)
-            self.image_label.setPixmap(QPixmap.fromImage(qimage))
+            self.image_label.setPixmap(qtg.QPixmap.fromImage(qimage))
             self.setFixedSize(self.size())
 
     def record(self):
@@ -454,7 +455,9 @@ class LeptonWidget(QWidget):
                 self._timer.stop()
 
                 # let the user decide where to save the data
-                path = QFileDialog.getSaveFileName(self, "Saving dialog", os.getcwd())
+                path = qtw.QFileDialog.getSaveFileName(
+                    self, "json / npz file dialog", os.getcwd()
+                )
 
                 # save the data
                 if len(path) > 0:
