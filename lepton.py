@@ -243,7 +243,7 @@ class LeptonCamera:
 
     def to_dict(self):
         return {
-            i.strftime("%d-%b-%Y (%H:%M:%S.%f)"): v.tolist()
+            i.strftime("%d-%b-%Y %H:%M:%S.%f"): v.tolist()
             for i, v in self._data.items()
         }
 
@@ -275,11 +275,17 @@ class LeptonCamera:
         timestamps, images = self.to_numpy()
         np.savez(filename, timestamps=timestamps, images=images)
 
-    def to_json(self):
+    def to_json(self, filename):
         """
-        convert the data to a json string.
+        store the data as a json file.
+
+        Parameters
+        ----------
+        filename: str
+            a valid filename path
         """
-        return json.dumps(self.to_dict())
+        with open(filename, "w") as buf:
+            json.dump(self.to_dict(), buf)
 
 
 class LeptonWidget(QWidget):
@@ -287,10 +293,6 @@ class LeptonWidget(QWidget):
     Initialize a Widget capable of visualizing videos sampled from
     an external device.
     """
-
-    # class variables
-    _camera = None
-    _timer = None
 
     def __init__(self, gain_mode="HIGH"):
         """
@@ -452,26 +454,30 @@ class LeptonWidget(QWidget):
                 self._timer.stop()
 
                 # let the user decide where to save the data
-                out = QFileDialog()
-                out.setFileMode(QFileDialog.AnyFile)
-                out.setAcceptMode(QFileDialog.AcceptSave)
-                out.setNameFilters(["JSON files (*.json)", "NPZ files (*.npz)"])
-                out.show()
-                path = out.selectedFiles()[0].replace("/", os.path.sep)
+                path = QFileDialog.getSaveFileName(self, "Saving dialog", os.getcwd())
 
                 # save the data
-                if len(path) > 1:
-                    if not path.endswith(".json") or not path.endswidth(".npz"):
+                if len(path) > 0:
+                    path = path[0].replace("/", os.path.sep)
+                    ext = path.split(".")[-1]
+                    if ext == path:
+                        ext = "json"
                         path += ".json"
                     root = os.path.sep.join(path.split(os.path.sep)[:-1])
                     os.makedirs(root, exist_ok=True)
 
                     # check the file extension and type
-                    if path.split(".")[-1].lower() == "json":
-                        with open(path, "w") as file_buf:
-                            file_buf.write(self._camera.to_json())
-                    elif path.split(".")[-1].lower() == "npz":
+                    if ext.lower() == "json":
+                        self._camera.to_json(path)
+                    elif ext.lower() == "npz":
                         self._camera.to_npz(path)
+                    else:
+                        raise NotImplementedError(
+                            "{} extension not supported.".format(ext)
+                        )
+
+                    # reset the camera buffer
+                    self._camera.clear()
 
                 # restart the timer
                 self._timer.start()
