@@ -1,48 +1,46 @@
-# dll imports
+# lepton 3.5 purethermal camera dll imports
 # the proper folder and file are defined by the __init__ file
 from Lepton import CCI
 from IR16Filters import IR16Capture, NewBytesFrameEvent
 
-# additional imports
-from collections import deque
-from time import sleep
+# python useful packages
 from threading import Thread
 from datetime import datetime, timedelta
 import numpy as np
+import json
+import os
+
+# GUI-related imports
+from PySide2.QtCore import *
+from PySide2.QtGui import *
+from PySide2.QtWidgets import *
+import qimage2ndarray
+import cv2
 
 
-class Lepton:
+class LeptonCamera:
     """
-    Initialize a Lepton camera object able to capture thermal images from
-    a lepton 3.5 sensor.
+    Initialize a Lepton camera object capable of communicating to
+    an pure thermal device equipped with a lepton 3.5 sensor.
 
     Parameters
     ----------
-    sampling_frequency: float/int
-        the selected sampling frequency. It must be a float or int value
-        in the (0, 8.7] range.
-
-    shape: list, tuple of int with len = 2
-        the shape of the resulting image in pixels.
-
     gain_mode: str
         any between "LOW" or "HIGH". It defines the gain mode of the lepton camera.
     """
 
     # class variables
     _device = None
-    _buffer = deque()
     _capture = None
     _data = {}
     _recording = False
-    _shape = (120, 120)
-    _sampling_frequency = 8.7
-    _start_at = None
-    _stop_at = None
+    _last = None
 
-    # constructor
-    def __init__(self, sampling_frequency=8.7, shape=(120, 120), gain_mode="HIGH"):
-
+    def __init__(self, gain_mode="HIGH"):
+        """
+        constructor
+        """
+        super(LeptonCamera, self).__init__()
         # find a valid device
         devices = [i for i in CCI.GetDevices() if i.Name.startswith("PureThermal")]
 
@@ -75,12 +73,6 @@ class Lepton:
 
         # set the gain mode
         self.set_gain(gain_mode)
-
-        # set the sampling frequency
-        self.set_sampling_frequency(sampling_frequency)
-
-        # set the image output shape
-        self.set_shape(shape)
 
         # set radiometric
         try:
@@ -121,69 +113,80 @@ class Lepton:
             assert gain_mode in valid_gains, txt
             self._device.sys.SetGainMode(gain_mode)
 
-    def set_sampling_frequency(self, freq):
-        """
-        set the sampling frequency of the lepton camera
-
-        Parameters
-        ----------
-        freq: float/int
-            any value within the (0, 8.7] range.
-        """
-
-        # set the sample size
-        txt = "freq must be an int or float in the (0, 8.7] range."
-        assert isinstance(freq, (int, float)), txt
-        assert freq > 0 and freq <= 8.7, txt
-        self._sampling_frequency = freq
-
-    def get_sampling_frequency(self):
-        """
-        return the actual sampling frequency.
-        """
-        return self._sampling_frequency
-
-    def set_shape(self, shape):
-        """
-        set the shape of the collected data.
-
-        Parameters
-        ----------
-        shape: tuple/list of len = 2
-            a tuple of int with len = 2. The maximum input shape must be:
-                width = 160 px
-                height = 120 px
-        """
-        txt = "shape must be a tuple/list of type (int, int)."
-        assert isinstance(shape, (tuple, list)), txt
-        assert len(shape) == 2, txt
-        assert all([isinstance(i, int) for i in shape]), txt
-        txt = "width must be in the (0, {}] range."
-        assert shape[0] > 0 and shape[0] <= 160, txt.format(160)
-        assert shape[1] > 0 and shape[0] <= 120, txt.format(120)
-        self._shape = tuple(shape)
-
-    def get_shape(self):
-        """
-        return the actual input shape.
-        """
-        return self._shape
-
     def _add_frame(self, array, width, height):
         """
         add a new frame to the buffer of readed data.
         """
-        self._buffer.append((height, width, array))
+
+        # get the sampling timestamp
+        dt = datetime.now()
+
+        # parse the thermal data to become a readable numpy array
+        img = np.fromiter(array, dtype="uint16").reshape(height, width)
+        img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
+
+        # get the recording time
+        if len(self._data) > 1:
+            keys = [i for i in self._data.keys()]
+            delta = (dt - keys[0]).total_seconds()
+            h = int(delta // 3600)
+            m = int((delta - h * 3600) // 60)
+            s = int((delta - h * 3600 - m * 60) // 1)
+            d = int(((delta % 1) * 1e6) // 1e5)
+            lapsed = "{:02d}:{:02d}:{:02d}.{:01d}".format(h, m, s, d)
+        else:
+            lapsed = "00:00:00.0"
+
+        # get the fps
+        if self._last is None:
+            fps = 0.0
+        else:
+            fps = 1.0 / (dt - self._last["timestamp"]).total_seconds()
+
+        # update the last reading
+        labels = ["timestamp", "image", "fps", "recording_time"]
+        values = [dt, img, fps, lapsed]
+        self._last = {i: j for i, j in zip(labels, values)}
+
+        # update the list of collected data
+        if self.is_recording():
+            self._data[dt] = img
+
+    def get_last(self):
+        """
+        return the last sampled data.
+        """
+        return self._last
+
+    def get_shape(self):
+        """
+        return the shape of the collected images.
+        """
+        last = self.get_last()
+        if last is None:
+            return None
+        return last["image"].shape
+
+    @property
+    def aspect_ratio(self):
+        shape = self.get_shape()
+        if shape is None:
+            return None
+        return shape[0] / shape[1]
 
     def is_recording(self):
         return self._recording
 
-    def read(self, n_frames=None, time=None):
+    def capture(self, save=True, n_frames=None, time=None):
         """
-        read a series of frames from the camera.
+        record a series of frames from the camera.
 
         Parameters
         ----------
+        save: bool
+            if true the data are stored, otherwise nothing except
+            "last" is updated.
+
         n_frames: None / int
             if a positive int is provided, n_frames are captured.
             Otherwise, all the frames collected are saved until the
@@ -193,87 +196,56 @@ class Lepton:
             if a positive int is provided, data is sampled for the indicated
             amount of seconds.
         """
-        self._recording = True
-        self._buffer.clear()
-
-        # adjust the n_frames to the sampling frequency
-        if time is None and n_frames is not None:
-            time = n_frames / self._sampling_frequency
 
         # start reading data
+        assert save or not save, "save must be a bool"
         self._capture.RunGraph()
-        while len(self._buffer) == 0:
+        while self.get_last() is None:
             pass
-        self._start_at = datetime.now()
+        self._recording = save
 
         # continue reading until a stopping criterion is met
         if time is not None:
 
             def stop_reading(time):
-                sleep(time)
-                self.stop()
+                if len(self._data) > 0:
+                    keys = [i for i in self._data]
+                    t0 = keys[0]
+                    t1 = keys[-1]
+                    if (t1 - t0).total_seconds() >= time:
+                        self.stop()
 
             t = Thread(target=stop_reading, args=[time])
             t.run()
 
-    def _parse_data(self):
-        """
-        parse the collected data to obtain readable images and timestamps
-        """
+        elif n_frames is not None:
 
-        # extract the samples according to the selected sampling frequency
-        n = len(self._buffer)
-        tic = self._start_at.timestamp()
-        toc = self._stop_at.timestamp()
-        time_array = np.linspace(tic, toc, n)
-        time_array = [datetime.fromtimestamp(i) for i in time_array]
-        dt = 1.0 / self._sampling_frequency
-        sec = int(dt // 1)
-        mic = int((dt % max(1, sec)) * 1e6)
-        dt = timedelta(seconds=sec, microseconds=mic)
-        t = time_array[0] - dt
-        while t < time_array[-1]:
-            t += dt
-            i = 0
-            while i < len(time_array) and time_array[i] < t:
-                i += 1
-            if i < len(time_array):
+            def stop_reading(n_frames):
+                if len(self._data) >= n_frames:
+                    self.stop()
 
-                # adjust the output shape
-                h, w, f = self._buffer[i]
-                img = np.fromiter(f, dtype="uint16").reshape(h, w)
-                y_off = max(h - self._shape[0], 0) // 2
-                y_idx = np.arange(y_off, y_off + self._shape[0])
-                x_off = max(w - self._shape[1], 0) // 2
-                x_idx = np.arange(x_off, x_off + self._shape[1])
-                img = img[y_idx, :][:, x_idx]
-
-                # the image is in centikelvin. Therefore convert it to celsius units
-                img = (img - 27315.0) / 100.0
-
-                # return the data
-                tm = time_array[i]
-                self._data[tm] = img
+            t = Thread(target=stop_reading, args=[n_frames])
+            t.run()
 
     def stop(self):
         """
         stop reading from camera.
         """
-        if self.is_recording():
-            self._capture.StopGraph()
-            self._stop_at = datetime.now()
-            self._recording = False
-            self._parse_data()
+        self._recording = False
+        self._capture.StopGraph()
 
     def clear(self):
         """
         clear the current object memory and buffer
         """
         self._data = {}
-        self._buffer.clear()
+        self._last = None
 
     def to_dict(self):
-        return self._data
+        return {
+            i.strftime("%d-%b-%Y (%H:%M:%S.%f)"): v.tolist()
+            for i, v in self._data.items()
+        }
 
     def to_numpy(self):
         """
@@ -293,7 +265,7 @@ class Lepton:
 
     def to_npz(self, filename):
         """
-        store the recorded data to a compresse npz file.
+        store the recorded data to a compressed npz file.
 
         Parameters
         ----------
@@ -302,3 +274,204 @@ class Lepton:
         """
         timestamps, images = self.to_numpy()
         np.savez(filename, timestamps=timestamps, images=images)
+
+    def to_json(self):
+        """
+        convert the data to a json string.
+        """
+        return json.dumps(self.to_dict())
+
+
+class LeptonWidget(QWidget):
+    """
+    Initialize a Widget capable of visualizing videos sampled from
+    an external device.
+    """
+
+    # class variables
+    _camera = None
+    _timer = None
+
+    def __init__(self, gain_mode="HIGH"):
+        """
+        constructor
+        """
+        super(LeptonWidget, self).__init__()
+
+        # camera initializer
+        self._camera = LeptonCamera(gain_mode)
+        self._camera.capture(save=False)
+
+        # image label
+        self.image_label = QLabel()
+        self.image_label.setMouseTracking(True)
+        self.image_label.installEventFilter(self)
+
+        # button bar with both recording and exit button
+        self.quit_button = QPushButton("QUIT")
+        self.quit_button.clicked.connect(self.close)
+        self.rec_button = QPushButton("● START RECORDING", self)
+        self.rec_button.clicked.connect(self.record)
+        self.rec_button.setCheckable(True)
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.rec_button)
+        button_layout.addWidget(self.quit_button)
+        button_pane = QWidget()
+        button_pane.setFixedHeight(50)
+        button_pane.setLayout(button_layout)
+
+        # temperatures label
+        self.mouse_data_label = QLabel("Pointer t:  °C")
+        self.mean_data_label = QLabel("Mean t:  °C")
+        self.max_data_label = QLabel("Max t:  °C")
+        self.min_data_label = QLabel("Min t:  °C")
+        self.fps_label = QLabel("fps:")
+        data_layout = QHBoxLayout()
+        data_layout.addWidget(self.mouse_data_label)
+        data_layout.addWidget(self.mean_data_label)
+        data_layout.addWidget(self.min_data_label)
+        data_layout.addWidget(self.max_data_label)
+        data_layout.addWidget(self.fps_label)
+        data_pane = QWidget()
+        data_pane.setFixedHeight(50)
+        data_pane.setLayout(data_layout)
+
+        # main layout
+        self.main_layout = QVBoxLayout()
+        self.main_layout.addWidget(self.image_label)
+        self.main_layout.addWidget(data_pane)
+        self.main_layout.addWidget(button_pane)
+        self.setLayout(self.main_layout)
+
+        # stream handler
+        self._timer = QTimer()
+        self._timer.timeout.connect(self.stream_video)
+        self._timer.start(100)
+
+    def eventFilter(self, source, event):
+
+        if self._camera.get_last() is not None:
+
+            # update the min temperature label
+            min_temp = np.min(self._camera.get_last()["image"])
+            min_txt = "Min t: {:0.1f} °C".format(min_temp)
+            self.min_data_label.setText(min_txt)
+
+            # update the max temperature label
+            max_temp = np.max(self._camera.get_last()["image"])
+            max_txt = "Max t: {:0.1f} °C".format(max_temp)
+            self.max_data_label.setText(max_txt)
+
+            # update the avg temperature label
+            avg_temp = np.mean(self._camera.get_last()["image"])
+            avg_txt = "Mean t: {:0.1f} °C".format(avg_temp)
+            self.mean_data_label.setText(avg_txt)
+
+            # update the fps label
+            fps_txt = "fps: {:0.1f}".format(self._camera.get_last()["fps"])
+            self.fps_label.setText(fps_txt)
+
+            # check if the pointer is on the image and update pointer temperature
+            if event.type() == QEvent.MouseMove:
+
+                # get the mouse coordinates
+                x, y = (event.x(), event.y())
+
+                # rescale to the original image size
+                shape = self._camera.get_shape()
+                w_res = int(x * shape[1] / self.image_label.width())
+                h_res = int(y * shape[0] / self.image_label.height())
+
+                # update data_label with the temperature at mouse position
+                temp = self._camera.get_last()["image"][h_res, w_res]
+                txt = "Pointer t: {:0.1f} °C".format(temp)
+                self.mouse_data_label.setText(txt)
+
+            # the pointer leaves the image, therefore no temperature has to be shown
+            elif event.type() == QEvent.Leave:
+                txt = "Pointer t:  °C"
+                self.mouse_data_label.setText(txt)
+
+        return False
+
+    def stream_video(self):
+        """
+        display the last captured images.
+        """
+        if self._camera.get_last() is not None:
+
+            # get the image
+            img = self._camera.get_last()["image"]
+
+            # convert to grayscale
+            gry = (img - np.min(img)) / (np.max(img) - np.min(img)) * 255
+            gry = np.expand_dims(gry, 2).astype(np.uint8)
+            gry = cv2.merge([gry, gry, gry])
+
+            # resize preserving the aspect ratio
+            # view_w = self.image_label.width()
+            # view_h = self.image_label.height()
+            h = img.shape[0] * 4
+            w = img.shape[1] * 4
+            resized_image = cv2.resize(gry, (w, h))
+
+            # converto to heatmap
+            heatmap = cv2.applyColorMap(resized_image, cv2.COLORMAP_HOT)
+
+            # set the recording overlay if required
+            if self._camera.is_recording():
+                cv2.putText(
+                    heatmap,
+                    "REC: {}".format(self._camera.get_last()["recording_time"]),
+                    (10, int(h * 0.95)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (255, 255, 255),
+                    2,
+                    2,
+                )
+
+            # update the view
+            qimage = qimage2ndarray.array2qimage(heatmap)
+            self.image_label.setPixmap(QPixmap.fromImage(qimage))
+            self.setFixedSize(self.size())
+
+    def record(self):
+        """
+        start and stop the recording of the data.
+        """
+        if self.rec_button.isChecked():
+            self.rec_button.setText("■ STOP RECORDING")
+            self._camera._recording = True
+        else:
+            self.rec_button.setText("● START RECORDING")
+            self._camera._recording = False
+            if len(self._camera._data) > 0:
+
+                # stop the timer
+                self._timer.stop()
+
+                # let the user decide where to save the data
+                out = QFileDialog()
+                out.setFileMode(QFileDialog.AnyFile)
+                out.setAcceptMode(QFileDialog.AcceptSave)
+                out.setNameFilters(["JSON files (*.json)", "NPZ files (*.npz)"])
+                out.show()
+                path = out.selectedFiles()[0].replace("/", os.path.sep)
+
+                # save the data
+                if len(path) > 1:
+                    if not path.endswith(".json") or not path.endswidth(".npz"):
+                        path += ".json"
+                    root = os.path.sep.join(path.split(os.path.sep)[:-1])
+                    os.makedirs(root, exist_ok=True)
+
+                    # check the file extension and type
+                    if path.split(".")[-1].lower() == "json":
+                        with open(path, "w") as file_buf:
+                            file_buf.write(self._camera.to_json())
+                    elif path.split(".")[-1].lower() == "npz":
+                        self._camera.to_npz(path)
+
+                # restart the timer
+                self._timer.start()
