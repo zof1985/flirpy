@@ -31,14 +31,3 @@ python integration for FLIR Lepton 3.5
         plt.imshow(img)
         plt.title(time)
         plt.show()
-
-    # use the pyqt interface to have a real-time monitoring of the data
-
-    from flirpy.lepton import LeptonWidget
-    from PySide2.QtWidgets import QApplication
-    import sys
-
-    app = QApplication(sys.argv)
-    camera = LeptonWidget()
-    camera.show()
-    sys.exit(app.exec_())
