@@ -24,11 +24,12 @@ class LeptonCamera:
     """
 
     # class variables
-    _device = None
-    _capture = None
+    device = None
+    reader = None
     _data = {}
     _recording = False
     _last = None
+    time_format = "%d-%b-%Y %H:%M:%S.%f"
 
     def __init__(self, gain_mode="HIGH"):
         """
@@ -46,43 +47,43 @@ class LeptonCamera:
             while True:
                 idx = input("Select the index of the required device.")
                 if isinstance(idx, int) and idx in range(len(devices)):
-                    self._device = devices[idx]
+                    self.device = devices[idx]
                     break
                 else:
                     print("Unrecognized input value.\n")
 
         # if just one device is found, select it
         elif len(devices) == 1:
-            self._device = devices[0]
+            self.device = devices[0]
 
         # tell the user that no valid devices have been found.
         else:
-            self._device = None
+            self.device = None
 
         # open the found device
         txt = "No devices called 'PureThermal' have been found."
-        assert self._device is not None, txt
-        self._device = self._device.Open()
-        self._device.sys.RunFFCNormalization()
+        assert self.device is not None, txt
+        self.device = self.device.Open()
+        self.device.sys.RunFFCNormalization()
 
         # set the gain mode
         self.set_gain(gain_mode)
 
         # set radiometric
         try:
-            self._device.rad.SetTLinearEnableStateChecked(True)
+            self.device.rad.SetTLinearEnableStateChecked(True)
         except:
             print("this lepton does not support tlinear")
 
         # setup the buffer
-        self._capture = IR16Capture()
-        self._capture.SetupGraphWithBytesCallback(NewBytesFrameEvent(self._add_frame))
+        self.reader = IR16Capture()
+        self.reader.SetupGraphWithBytesCallback(NewBytesFrameEvent(self._add_frame))
 
     def get_gain(self):
         """
         return the actual gain mode.
         """
-        return self._device.sys.GetGainMode()
+        return self.device.sys.GetGainMode()
 
     def set_gain(self, gain_mode):
         """
@@ -98,14 +99,14 @@ class LeptonCamera:
         if isinstance(gain_mode, str):
             assert gain_mode.upper() in ["HIGH", "LOW"], txt
             if gain_mode == "HIGH":
-                self._device.sys.SetGainMode(CCI.Sys.GainMode.HIGH)
+                self.device.sys.SetGainMode(CCI.Sys.GainMode.HIGH)
             else:
-                self._device.sys.SetGainMode(CCI.Sys.GainMode.LOW)
+                self.device.sys.SetGainMode(CCI.Sys.GainMode.LOW)
         else:
             valid_gains = [CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW]
             txt += " or any of {}".format(valid_gains)
             assert gain_mode in valid_gains, txt
-            self._device.sys.SetGainMode(gain_mode)
+            self.device.sys.SetGainMode(gain_mode)
 
     def _add_frame(self, array, width, height):
         """
@@ -114,15 +115,18 @@ class LeptonCamera:
 
         # get the sampling timestamp
         dt = datetime.now()
+        timestamp = dt.strftime(self.time_format)
 
         # parse the thermal data to become a readable numpy array
         img = np.fromiter(array, dtype="uint16").reshape(height, width)
         img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
+        img = img.astype(np.float16)
 
         # get the recording time
         if len(self._data) > 1:
             keys = [i for i in self._data.keys()]
-            delta = (dt - keys[0]).total_seconds()
+            t0 = datetime.strptime(keys[0], self.time_format)
+            delta = (dt - t0).total_seconds()
             h = int(delta // 3600)
             m = int((delta - h * 3600) // 60)
             s = int((delta - h * 3600 - m * 60) // 1)
@@ -135,16 +139,17 @@ class LeptonCamera:
         if self._last is None:
             fps = 0.0
         else:
-            fps = 1.0 / (dt - self._last["timestamp"]).total_seconds()
+            t1 = datetime.strptime(self._last["timestamp"], self.time_format)
+            fps = 1.0 / (dt - t1).total_seconds()
 
         # update the last reading
         labels = ["timestamp", "image", "fps", "recording_time"]
-        values = [dt, img, fps, lapsed]
+        values = [timestamp, img, fps, lapsed]
         self._last = {i: j for i, j in zip(labels, values)}
 
         # update the list of collected data
         if self.is_recording():
-            self._data[dt] = img
+            self._data[timestamp] = img.astype
 
     def get_last(self):
         """
@@ -190,7 +195,7 @@ class LeptonCamera:
 
         # start reading data
         assert save or not save, "save must be a bool"
-        self._capture.RunGraph()
+        self.reader.RunGraph()
         while self.get_last() is None:
             pass
         self._recording = save
@@ -223,7 +228,7 @@ class LeptonCamera:
         stop reading from camera.
         """
         self._recording = False
-        self._capture.StopGraph()
+        self.reader.StopGraph()
 
     def clear(self):
         """
@@ -232,15 +237,10 @@ class LeptonCamera:
         self._data = {}
         self._last = None
 
-    def to_dict(self, dtype=np.float16):
+    def to_dict(self):
         """
         return the sampled data as dict with
         timestamps as keys and the sampled data as values.
-
-        Parameters
-        ----------
-        dtype: any
-            any valid dtype that can be passed to a numpy ndarray.
 
         Returns
         -------
@@ -248,19 +248,11 @@ class LeptonCamera:
             the dict containing the sampled data.
             Timestamps are provided as keys and the sampled data as values.
         """
-        return {
-            i.strftime("%d-%b-%Y %H:%M:%S.%f"): v.astype(dtype).tolist()
-            for i, v in self._data.items()
-        }
+        return self._data
 
-    def to_numpy(self, dtype=np.float16):
+    def to_numpy(self):
         """
         return the sampled data as numpy arrays.
-
-        Parameters
-        ----------
-        dtype: any
-            any valid dtype that can be passed to a numpy ndarray.
 
         Returns
         -------
@@ -270,11 +262,11 @@ class LeptonCamera:
         x: 3D numpy array
             a 3D array where each the first dimension correspond to each sample.
         """
-        t = np.array(list(self._data.keys()), dtype=np.datetime64)
-        x = np.atleast_3d(list(self._data.values())).astype(dtype)
+        t = np.array(list(self._data.keys()))
+        x = np.atleast_3d(list(self._data.values()), dtype=np.float16)
         return t, x
 
-    def to_npz(self, filename, dtype=np.float16):
+    def to_npz(self, filename):
         """
         store the recorded data to a compressed npz file.
 
@@ -282,14 +274,11 @@ class LeptonCamera:
         ----------
         filename: str
             a valid filename path
-
-        dtype: any
-            any valid dtype that can be passed to a numpy ndarray.
         """
-        timestamps, images = self.to_numpy(dtype)
+        timestamps, images = self.to_numpy()
         np.savez(filename, timestamps=timestamps, images=images)
 
-    def to_json(self, filename, dtype=np.float16):
+    def to_json(self, filename):
         """
         store the data as a json file.
 
@@ -297,14 +286,11 @@ class LeptonCamera:
         ----------
         filename: str
             a valid filename path
-
-        dtype: any
-            any valid dtype that can be passed to a numpy ndarray.
         """
         with open(filename, "w") as buf:
             json.dump(self.to_dict(), buf)
 
-    def to_h5(self, filename, dtype=np.float16, compression=9):
+    def to_h5(self, filename, compression=9):
         """
         store the data as a (gzip compressed) h5 file.
 
@@ -313,18 +299,14 @@ class LeptonCamera:
         filename: str
             a valid filename path
 
-        dtype: any
-            any valid dtype that can be passed to a numpy ndarray.
-
         compression: int
             the h5 compression level (default 9)
         """
         hf = h5py.File(filename, "w")
-        times, samples = self.to_numpy(dtype)
-        times = times.astype(datetime)
+        times, samples = self.to_numpy()
         hf.create_dataset(
             "timestamps",
-            data=[i.strftime("%d-%b-%Y %H:%M:%S.%f") for i in times],
+            data=times,
             compression="gzip",
             compression_opts=compression,
         )
