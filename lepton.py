@@ -7,15 +7,9 @@ from IR16Filters import IR16Capture, NewBytesFrameEvent
 from threading import Thread
 from datetime import datetime
 import numpy as np
+import h5py
 import json
 import os
-
-# GUI-related imports
-import PySide2.QtWidgets as qtw
-import PySide2.QtCore as qtc
-import PySide2.QtGui as qtg
-import qimage2ndarray
-import cv2
 
 
 class LeptonCamera:
@@ -169,7 +163,7 @@ class LeptonCamera:
         shape = self.get_shape()
         if shape is None:
             return None
-        return shape[0] / shape[1]
+        return shape[1] / shape[0]
 
     def is_recording(self):
         return self._recording
@@ -239,6 +233,21 @@ class LeptonCamera:
         self._last = None
 
     def to_dict(self, dtype=np.float16):
+        """
+        return the sampled data as dict with
+        timestamps as keys and the sampled data as values.
+
+        Parameters
+        ----------
+        dtype: any
+            any valid dtype that can be passed to a numpy ndarray.
+
+        Returns
+        -------
+        d: dict
+            the dict containing the sampled data.
+            Timestamps are provided as keys and the sampled data as values.
+        """
         return {
             i.strftime("%d-%b-%Y %H:%M:%S.%f"): v.astype(dtype).tolist()
             for i, v in self._data.items()
@@ -247,6 +256,11 @@ class LeptonCamera:
     def to_numpy(self, dtype=np.float16):
         """
         return the sampled data as numpy arrays.
+
+        Parameters
+        ----------
+        dtype: any
+            any valid dtype that can be passed to a numpy ndarray.
 
         Returns
         -------
@@ -268,6 +282,9 @@ class LeptonCamera:
         ----------
         filename: str
             a valid filename path
+
+        dtype: any
+            any valid dtype that can be passed to a numpy ndarray.
         """
         timestamps, images = self.to_numpy(dtype)
         np.savez(filename, timestamps=timestamps, images=images)
@@ -280,204 +297,38 @@ class LeptonCamera:
         ----------
         filename: str
             a valid filename path
+
+        dtype: any
+            any valid dtype that can be passed to a numpy ndarray.
         """
         with open(filename, "w") as buf:
             json.dump(self.to_dict(), buf)
 
-
-class LeptonWidget(qtw.QWidget):
-    """
-    Initialize a Widget capable of visualizing videos sampled from
-    an external device.
-    """
-
-    def __init__(self, gain_mode="HIGH"):
+    def to_h5(self, filename, dtype=np.float16, compression=9):
         """
-        constructor
+        store the data as a (gzip compressed) h5 file.
+
+        Parameters
+        ----------
+        filename: str
+            a valid filename path
+
+        dtype: any
+            any valid dtype that can be passed to a numpy ndarray.
+
+        compression: int
+            the h5 compression level (default 9)
         """
-        super(LeptonWidget, self).__init__()
-
-        # camera initializer
-        self._camera = LeptonCamera(gain_mode)
-        self._camera.capture(save=False)
-
-        # image label
-        self.image_label = qtw.QLabel()
-        self.image_label.setMouseTracking(True)
-        self.image_label.installEventFilter(self)
-
-        # button bar with both recording and exit button
-        self.quit_button = qtw.QPushButton("QUIT")
-        self.quit_button.clicked.connect(self.close)
-        self.rec_button = qtw.QPushButton("● START RECORDING", self)
-        self.rec_button.clicked.connect(self.record)
-        self.rec_button.setCheckable(True)
-        button_layout = qtw.QHBoxLayout()
-        button_layout.addWidget(self.rec_button)
-        button_layout.addWidget(self.quit_button)
-        button_pane = qtw.QWidget()
-        button_pane.setFixedHeight(100)
-        button_pane.setLayout(button_layout)
-
-        # temperatures label
-        self.mouse_data_label = qtw.QLabel("Pointer t:  °C")
-        self.mean_data_label = qtw.QLabel("Mean t:  °C")
-        self.max_data_label = qtw.QLabel("Max t:  °C")
-        self.min_data_label = qtw.QLabel("Min t:  °C")
-        self.fps_label = qtw.QLabel("fps:")
-        data_layout = qtw.QHBoxLayout()
-        data_layout.addWidget(self.mouse_data_label)
-        data_layout.addWidget(self.mean_data_label)
-        data_layout.addWidget(self.min_data_label)
-        data_layout.addWidget(self.max_data_label)
-        data_layout.addWidget(self.fps_label)
-        data_pane = qtw.QWidget()
-        data_pane.setFixedHeight(100)
-        data_pane.setLayout(data_layout)
-
-        # main layout
-        self.main_layout = qtw.QVBoxLayout()
-        self.main_layout.addWidget(self.image_label)
-        self.main_layout.addWidget(data_pane)
-        self.main_layout.addWidget(button_pane)
-        self.setLayout(self.main_layout)
-        self.setWindowTitle("LeptonWidget")
-
-        # stream handler
-        self._timer = qtc.QTimer()
-        self._timer.timeout.connect(self.stream_video)
-        self._timer.start(100)
-
-    def eventFilter(self, source, event):
-
-        if self._camera.get_last() is not None:
-
-            # update the min temperature label
-            min_temp = np.min(self._camera.get_last()["image"])
-            min_txt = "Min t: {:0.1f} °C".format(min_temp)
-            self.min_data_label.setText(min_txt)
-
-            # update the max temperature label
-            max_temp = np.max(self._camera.get_last()["image"])
-            max_txt = "Max t: {:0.1f} °C".format(max_temp)
-            self.max_data_label.setText(max_txt)
-
-            # update the avg temperature label
-            avg_temp = np.mean(self._camera.get_last()["image"])
-            avg_txt = "Mean t: {:0.1f} °C".format(avg_temp)
-            self.mean_data_label.setText(avg_txt)
-
-            # update the fps label
-            fps_txt = "fps: {:0.1f}".format(self._camera.get_last()["fps"])
-            self.fps_label.setText(fps_txt)
-
-            # check if the pointer is on the image and update pointer temperature
-            if event.type() == qtc.QEvent.MouseMove:
-
-                # get the mouse coordinates
-                x, y = (event.x(), event.y())
-
-                # rescale to the original image size
-                shape = self._camera.get_shape()
-                w_res = int(x * shape[1] / self.image_label.width())
-                h_res = int(y * shape[0] / self.image_label.height())
-
-                # update data_label with the temperature at mouse position
-                temp = self._camera.get_last()["image"][h_res, w_res]
-                txt = "Pointer t: {:0.1f} °C".format(temp)
-                self.mouse_data_label.setText(txt)
-
-            # the pointer leaves the image, therefore no temperature has to be shown
-            elif event.type() == qtc.QEvent.Leave:
-                txt = "Pointer t:  °C"
-                self.mouse_data_label.setText(txt)
-
-        return False
-
-    def stream_video(self):
-        """
-        display the last captured images.
-        """
-        if self._camera.get_last() is not None:
-
-            # get the image
-            img = self._camera.get_last()["image"]
-
-            # convert to grayscale
-            gry = (img - np.min(img)) / (np.max(img) - np.min(img)) * 255
-            gry = np.expand_dims(gry, 2).astype(np.uint8)
-            gry = cv2.merge([gry, gry, gry])
-
-            # resize preserving the aspect ratio
-            # view_w = self.image_label.width()
-            # view_h = self.image_label.height()
-            h = img.shape[0] * 5
-            w = img.shape[1] * 5
-            resized_image = cv2.resize(gry, (w, h))
-
-            # converto to heatmap
-            heatmap = cv2.applyColorMap(resized_image, cv2.COLORMAP_HOT)
-
-            # set the recording overlay if required
-            if self._camera.is_recording():
-                cv2.putText(
-                    heatmap,
-                    "REC: {}".format(self._camera.get_last()["recording_time"]),
-                    (10, int(h * 0.95)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255, 255, 255),
-                    2,
-                    2,
-                )
-
-            # update the view
-            qimage = qimage2ndarray.array2qimage(heatmap)
-            self.image_label.setPixmap(qtg.QPixmap.fromImage(qimage))
-            self.setFixedSize(self.size())
-
-    def record(self):
-        """
-        start and stop the recording of the data.
-        """
-        if self.rec_button.isChecked():
-            self.rec_button.setText("■ STOP RECORDING")
-            self._camera._recording = True
-        else:
-            self.rec_button.setText("● START RECORDING")
-            self._camera._recording = False
-            if len(self._camera._data) > 0:
-
-                # stop the timer
-                self._timer.stop()
-
-                # let the user decide where to save the data
-                path = qtw.QFileDialog.getSaveFileName(
-                    self, "json / npz file dialog", os.getcwd()
-                )
-
-                # save the data
-                if len(path) > 0:
-                    path = path[0].replace("/", os.path.sep)
-                    ext = path.split(".")[-1]
-                    if ext == path:
-                        ext = "json"
-                        path += ".json"
-                    root = os.path.sep.join(path.split(os.path.sep)[:-1])
-                    os.makedirs(root, exist_ok=True)
-
-                    # check the file extension and type
-                    if ext.lower() == "json":
-                        self._camera.to_json(path)
-                    elif ext.lower() == "npz":
-                        self._camera.to_npz(path)
-                    else:
-                        raise NotImplementedError(
-                            "{} extension not supported.".format(ext)
-                        )
-
-                    # reset the camera buffer
-                    self._camera.clear()
-
-                # restart the timer
-                self._timer.start()
+        hf = h5py.File(filename, "w")
+        times, samples = self.to_numpy(dtype)
+        times = times.astype(datetime)
+        hf.create_dataset(
+            "timestamps",
+            data=[i.strftime("%d-%b-%Y %H:%M:%S.%f") for i in times],
+            compression="gzip",
+            compression_opts=compression,
+        )
+        hf.create_dataset(
+            "samples", data=samples, compression="gzip", compression_opts=compression
+        )
+        hf.close()
