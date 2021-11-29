@@ -162,10 +162,7 @@ class LeptonCamera:
         """
         return the shape of the collected images.
         """
-        last = self.get_last()
-        if last is None:
-            return None
-        return last["image"].shape
+        return (120, 160)
 
     @property
     def aspect_ratio(self):
@@ -241,13 +238,13 @@ class LeptonCamera:
         self._data = {}
         self._last = None
 
-    def to_dict(self):
+    def to_dict(self, dtype=np.float16):
         return {
-            i.strftime("%d-%b-%Y %H:%M:%S.%f"): v.tolist()
+            i.strftime("%d-%b-%Y %H:%M:%S.%f"): v.astype(dtype).tolist()
             for i, v in self._data.items()
         }
 
-    def to_numpy(self):
+    def to_numpy(self, dtype=np.float16):
         """
         return the sampled data as numpy arrays.
 
@@ -260,10 +257,10 @@ class LeptonCamera:
             a 3D array where each the first dimension correspond to each sample.
         """
         t = np.array(list(self._data.keys()), dtype=np.datetime64)
-        x = np.atleast_3d(list(self._data.values()))
+        x = np.atleast_3d(list(self._data.values())).astype(dtype)
         return t, x
 
-    def to_npz(self, filename):
+    def to_npz(self, filename, dtype=np.float16):
         """
         store the recorded data to a compressed npz file.
 
@@ -272,10 +269,10 @@ class LeptonCamera:
         filename: str
             a valid filename path
         """
-        timestamps, images = self.to_numpy()
+        timestamps, images = self.to_numpy(dtype)
         np.savez(filename, timestamps=timestamps, images=images)
 
-    def to_json(self, filename):
+    def to_json(self, filename, dtype=np.float16):
         """
         store the data as a json file.
 
