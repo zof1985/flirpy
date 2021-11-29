@@ -149,7 +149,7 @@ class LeptonCamera:
 
         # update the list of collected data
         if self.is_recording():
-            self._data[timestamp] = img.astype
+            self._data[timestamp] = img.astype(np.float16)
 
     def get_last(self):
         """
@@ -263,7 +263,7 @@ class LeptonCamera:
             a 3D array where each the first dimension correspond to each sample.
         """
         t = np.array(list(self._data.keys()))
-        x = np.atleast_3d(list(self._data.values())).astype(np.float16)
+        x = np.atleast_3d(list(self._data.values()))
         return t, x
 
     def to_npz(self, filename):
