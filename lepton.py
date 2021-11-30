@@ -6,6 +6,7 @@ from IR16Filters import IR16Capture, NewBytesFrameEvent
 # python useful packages
 from threading import Thread
 from datetime import datetime
+from typing import Tuple
 import numpy as np
 import h5py
 import json
@@ -31,9 +32,15 @@ class LeptonCamera:
     _last = None
     time_format = "%d-%b-%Y %H:%M:%S.%f"
 
-    def __init__(self, gain_mode="HIGH"):
+    def __init__(self, gain_mode: str = "HIGH") -> None:
         """
         constructor
+
+        Parameters
+        ----------
+        gain_mode: str or CCI.Sys.GainMode enum
+            any between "LOW", "HIGH" or
+            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
         """
         super(LeptonCamera, self).__init__()
         # find a valid device
@@ -79,13 +86,13 @@ class LeptonCamera:
         self.reader = IR16Capture()
         self.reader.SetupGraphWithBytesCallback(NewBytesFrameEvent(self._add_frame))
 
-    def get_gain(self):
+    def get_gain(self) -> CCI.Sys.GainMode:
         """
         return the actual gain mode.
         """
         return self.device.sys.GetGainMode()
 
-    def set_gain(self, gain_mode):
+    def set_gain(self, gain_mode: str) -> None:
         """
         set the gain mode of the current device
 
@@ -95,6 +102,7 @@ class LeptonCamera:
             any between "LOW", "HIGH" or
             CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
         """
+
         txt = "gain_mode must be a string (either 'LOW' or 'HIGH')"
         if isinstance(gain_mode, str):
             assert gain_mode.upper() in ["HIGH", "LOW"], txt
@@ -108,7 +116,7 @@ class LeptonCamera:
             assert gain_mode in valid_gains, txt
             self.device.sys.SetGainMode(gain_mode)
 
-    def _add_frame(self, array, width, height):
+    def _add_frame(self, array: bytearray, width: int, height: int) -> None:
         """
         add a new frame to the buffer of readed data.
         """
@@ -151,29 +159,34 @@ class LeptonCamera:
         if self.is_recording():
             self._data[timestamp] = img.astype(np.float16)
 
-    def get_last(self):
+    def get_last(self) -> dict:
         """
         return the last sampled data.
         """
         return self._last
 
-    def get_shape(self):
+    def get_shape(self) -> Tuple[int, int]:
         """
         return the shape of the collected images.
         """
         return (120, 160)
 
     @property
-    def aspect_ratio(self):
+    def aspect_ratio(self) -> float:
         shape = self.get_shape()
         if shape is None:
             return None
         return shape[1] / shape[0]
 
-    def is_recording(self):
+    def is_recording(self) -> bool:
         return self._recording
 
-    def capture(self, save=True, n_frames=None, time=None):
+    def capture(
+        self,
+        save: bool = True,
+        n_frames: Tuple[int, None] = None,
+        time: Tuple[int, None] = None,
+    ) -> None:
         """
         record a series of frames from the camera.
 
@@ -223,21 +236,21 @@ class LeptonCamera:
             t = Thread(target=stop_reading, args=[n_frames])
             t.run()
 
-    def stop(self):
+    def stop(self) -> None:
         """
         stop reading from camera.
         """
         self._recording = False
         self.reader.StopGraph()
 
-    def clear(self):
+    def clear(self) -> None:
         """
         clear the current object memory and buffer
         """
         self._data = {}
         self._last = None
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """
         return the sampled data as dict with
         timestamps as keys and the sampled data as values.
@@ -250,7 +263,7 @@ class LeptonCamera:
         """
         return self._data
 
-    def to_numpy(self):
+    def to_numpy(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         return the sampled data as numpy arrays.
 
@@ -266,7 +279,7 @@ class LeptonCamera:
         x = np.atleast_3d(list(self._data.values()))
         return t, x
 
-    def to_json(self):
+    def to_json(self) -> str:
         """
         return a json string of the data.
         """
@@ -295,6 +308,11 @@ class LeptonCamera:
         # check filename and retrieve the file extension
         assert isinstance(filename, str), "'filename' must be a str object."
         extension = filename.split(".")[-1].lower()
+
+        # ensure the folders exist
+        if not os.path.exists(filename):
+            root = os.path.sep.join(filename.split(os.path.sep)[:-1])
+            os.makedirs(root, exist_ok=True)
 
         if extension == "json":  # json format
             with open(filename, "w") as buf:
