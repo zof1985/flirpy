@@ -266,51 +266,56 @@ class LeptonCamera:
         x = np.atleast_3d(list(self._data.values()))
         return t, x
 
-    def to_npz(self, filename):
+    def to_json(self):
         """
-        store the recorded data to a compressed npz file.
+        return a json string of the data.
+        """
+        return json.dumps(self.to_dict())
+
+    def save(self, filename: str) -> None:
+        """
+        store the recorded data to file.
 
         Parameters
         ----------
-        filename: str
-            a valid filename path
-        """
-        timestamps, images = self.to_numpy()
-        np.savez(filename, timestamps=timestamps, images=images)
+        filename: a valid filename path
 
-    def to_json(self, filename):
-        """
-        store the data as a json file.
+        Notes
+        -----
+        the file extension is used to desume which file format is required.
+        Available formats are:
 
-        Parameters
-        ----------
-        filename: str
-            a valid filename path
-        """
-        with open(filename, "w") as buf:
-            json.dump(self.to_dict(), buf)
+            - ".h5" (gzip format with compression 9)
+            - ".npz" (compressed numpy format)
+            - ".json"
 
-    def to_h5(self, filename, compression=9):
+        If an invalid file format is found a TypeError is raised.
         """
-        store the data as a (gzip compressed) h5 file.
 
-        Parameters
-        ----------
-        filename: str
-            a valid filename path
+        # check filename and retrieve the file extension
+        assert isinstance(filename, str), "'filename' must be a str object."
+        extension = filename.split(".")[-1].lower()
 
-        compression: int
-            the h5 compression level (default 9)
-        """
-        hf = h5py.File(filename, "w")
-        times, samples = self.to_numpy()
-        hf.create_dataset(
-            "timestamps",
-            data=times.tolist(),
-            compression="gzip",
-            compression_opts=compression,
-        )
-        hf.create_dataset(
-            "samples", data=samples, compression="gzip", compression_opts=compression
-        )
-        hf.close()
+        if extension == "json":  # json format
+            with open(filename, "w") as buf:
+                json.dump(self.to_dict(), buf)
+
+        elif extension == "npz":  # npz format
+            timestamps, images = self.to_numpy()
+            np.savez(filename, timestamps=timestamps, images=images)
+
+        elif extension == "h5":  # h5 format
+            hf = h5py.File(filename, "w")
+            times, samples = self.to_numpy()
+            times = times.tolist()
+            hf.create_dataset(
+                "times", data=times, compression="gzip", compression_opts=9
+            )
+            hf.create_dataset(
+                "samples", data=samples, compression="gzip", compression_opts=9
+            )
+            hf.close()
+
+        else:  # unsupported formats
+            txt = "{} format not supported".format(extension)
+            raise TypeError(txt)
