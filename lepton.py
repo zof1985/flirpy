@@ -327,10 +327,16 @@ class LeptonCamera:
             times, samples = self.to_numpy()
             times = times.tolist()
             hf.create_dataset(
-                "times", data=times, compression="gzip", compression_opts=9
+                "times",
+                data=times,
+                compression="gzip",
+                compression_opts=9,
             )
             hf.create_dataset(
-                "samples", data=samples, compression="gzip", compression_opts=9
+                "samples",
+                data=samples,
+                compression="gzip",
+                compression_opts=9,
             )
             hf.close()
 
