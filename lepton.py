@@ -21,7 +21,8 @@ class LeptonCamera:
     Parameters
     ----------
     gain_mode: str
-        any between "LOW" or "HIGH". It defines the gain mode of the lepton camera.
+        any between "LOW" or "HIGH". It defines the gain mode of the lepton
+        camera.
     """
 
     # class variables
@@ -43,10 +44,15 @@ class LeptonCamera:
             CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
         """
         super(LeptonCamera, self).__init__()
-        # find a valid device
-        devices = [i for i in CCI.GetDevices() if i.Name.startswith("PureThermal")]
 
-        # if multiple devices are found, allow the user to select the preferred one
+        # find a valid device
+        devices = []
+        for i in CCI.GetDevices():
+            if i.Name.startswith("PureThermal"):
+                devices += [i]
+
+        # if multiple devices are found,
+        # allow the user to select the preferred one
         if len(devices) > 1:
             print("Multiple Pure Thermal devices have been found.\n")
             for i, d in enumerate(devices):
@@ -84,7 +90,8 @@ class LeptonCamera:
 
         # setup the buffer
         self.reader = IR16Capture()
-        self.reader.SetupGraphWithBytesCallback(NewBytesFrameEvent(self._add_frame))
+        callback = NewBytesFrameEvent(self._add_frame)
+        self.reader.SetupGraphWithBytesCallback(callback)
 
     def get_gain(self) -> CCI.Sys.GainMode:
         """
@@ -261,7 +268,9 @@ class LeptonCamera:
             the dict containing the sampled data.
             Timestamps are provided as keys and the sampled data as values.
         """
-        return self._data
+        timestamps = list(self._data.keys())
+        samples = [i.tolist() for i in self._data.values()]
+        return dict(zip(timestamps, samples))
 
     def to_numpy(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -273,17 +282,12 @@ class LeptonCamera:
             a numpy array containing the datetime object
 
         x: 3D numpy array
-            a 3D array where each the first dimension correspond to each sample.
+            a 3D array where each the first dimension correspond to each
+            sample.
         """
         t = np.array(list(self._data.keys()))
         x = np.atleast_3d(list(self._data.values()))
         return t, x
-
-    def to_json(self) -> str:
-        """
-        return a json string of the data.
-        """
-        return json.dumps(self.to_dict())
 
     def save(self, filename: str) -> None:
         """
@@ -319,15 +323,15 @@ class LeptonCamera:
                 json.dump(self.to_dict(), buf)
 
         elif extension == "npz":  # npz format
-            timestamps, images = self.to_numpy()
-            np.savez(filename, timestamps=timestamps, images=images)
+            timestamps, samples = self.to_numpy()
+            np.savez(filename, timestamps=timestamps, samples=samples)
 
         elif extension == "h5":  # h5 format
             hf = h5py.File(filename, "w")
             times, samples = self.to_numpy()
             times = times.tolist()
             hf.create_dataset(
-                "times",
+                "timestamps",
                 data=times,
                 compression="gzip",
                 compression_opts=9,
@@ -343,3 +347,63 @@ class LeptonCamera:
         else:  # unsupported formats
             txt = "{} format not supported".format(extension)
             raise TypeError(txt)
+
+    @staticmethod
+    def read_file(filename: str) -> None:
+        """
+        read the recorded data from file.
+
+        Parameters
+        ----------
+        filename: a valid filename path
+
+        Returns
+        -------
+        obj: dict
+            a dict where each key is a timestamp which contains the
+            corresponding image frame
+
+        Notes
+        -----
+        the file extension is used to desume which file format is used.
+        Available formats are:
+            - ".h5" (gzip format with compression 9)
+            - ".npz" (compressed numpy format)
+            - ".json"
+        """
+
+        # check filename and retrieve the file extension
+        assert isinstance(filename, str), "'filename' must be a str object."
+        extension = filename.split(".")[-1].lower()
+
+        # check the extension
+        valid_extensions = np.array(["npz", "json", "h5"])
+        txt = "file extension must be any of " + str(valid_extensions)
+        assert extension in valid_extensions, txt
+
+        # check if the file exists
+        assert os.path.exists(filename), "{} does not exists.".format(filename)
+
+        # datetime converted
+        def to_datetime(txt):
+            return datetime.strptime(txt, "%d-%b-%Y %H:%M:%S.%f")
+
+        # obtain the readed objects
+        if extension == "json":  # json format
+            with open(filename, "r") as buf:
+                obj = json.load(buf)
+            timestamps = list(obj.keys())
+            samples = np.array(list(obj.values())).astype(np.float16)
+
+        elif extension == "npz":  # npz format
+            with np.load(filename) as obj:
+                timestamps = obj["timestamps"]
+                samples = obj["samples"]
+
+        elif extension == "h5":  # h5 format
+            with h5py.File(filename, "r") as obj:
+                timestamps = obj["timestamps"][:].astype(str)
+                samples = obj["samples"][:].astype(np.float16)
+
+        # return the readings as dict
+        return dict(zip(map(to_datetime, timestamps), samples))
