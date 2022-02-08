@@ -131,3 +131,4 @@ dmypy.json
 # vscode
 /.vscode
 test.py
+.gitignore
