@@ -48,145 +48,121 @@ class LeptonCamera(qtw.QWidget):
     _path = ""
     _font_size = 12
 
-    def __init__(
-        self,
+    @staticmethod
+    def read_file(filename: str) -> None:
+        """
+        read the recorded data from file.
+
+        Parameters
+        ----------
+        filename: a valid filename path
+
+        Returns
+        -------
+        obj: dict
+            a dict where each key is a timestamp which contains the
+            corresponding image frame
+
+        Notes
+        -----
+        the file extension is used to desume which file format is used.
+        Available formats are:
+            - ".h5" (gzip format with compression 9)
+            - ".npz" (compressed numpy format)
+            - ".json"
+        """
+
+        # check filename and retrieve the file extension
+        assert isinstance(filename, str), "'filename' must be a str object."
+        extension = filename.split(".")[-1].lower()
+
+        # check the extension
+        valid_extensions = np.array(["npz", "json", "h5"])
+        txt = "file extension must be any of " + str(valid_extensions)
+        assert extension in valid_extensions, txt
+
+        # check if the file exists
+        assert os.path.exists(filename), "{} does not exists.".format(filename)
+
+        # datetime converted
+        def to_datetime(txt):
+            return datetime.strptime(txt, "%d-%b-%Y %H:%M:%S.%f")
+
+        # obtain the readed objects
+        if extension == "json":  # json format
+            with open(filename, "r") as buf:
+                obj = json.load(buf)
+            timestamps = list(obj.keys())
+            samples = np.array(list(obj.values())).astype(np.float16)
+
+        elif extension == "npz":  # npz format
+            with np.load(filename) as obj:
+                timestamps = obj["timestamps"]
+                samples = obj["samples"]
+
+        elif extension == "h5":  # h5 format
+            with h5py.File(filename, "r") as obj:
+                timestamps = obj["timestamps"][:].astype(str)
+                samples = obj["samples"][:].astype(np.float16)
+
+        # return the readings as dict
+        return dict(zip(map(to_datetime, timestamps), samples))
+
+    @staticmethod
+    def LeptonApp(
+        high_dpi: bool = True,
         sampling_frequency: float = 5,
         gain_mode: str = "HIGH",
     ) -> None:
         """
-        constructor
+        Create a PySide2.QApplication embedding the LeptonCamera.
+
+        Parameters
+        ----------
+        high_dpi: bool
+            should the application be rendered considering high dpi screens?
+
+        sampling_frequency: float, int
+            the sampling frequency in Hz for the camera readings.
+            It must be <= 8.5 Hz.
+
+        gain_mode: str or CCI.Sys.GainMode enum
+            any between "LOW", "HIGH" or
+            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
         """
-        super(LeptonCamera, self).__init__()
+        # highdpi scaling
+        qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, high_dpi)
+        qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, high_dpi)
 
-        # find a valid device
-        devices = []
-        for i in CCI.GetDevices():
-            if i.Name.startswith("PureThermal"):
-                devices += [i]
+        # app generation
+        app = qtw.QApplication(sys.argv)
+        camera = LeptonCamera(
+            sampling_frequency=sampling_frequency,
+            gain_mode=gain_mode,
+        )
+        camera.show()
+        sys.exit(app.exec_())
 
-        # if multiple devices are found,
-        # allow the user to select the preferred one
-        if len(devices) > 1:
-            print("Multiple Pure Thermal devices have been found.\n")
-            for i, d in enumerate(devices):
-                print("{}. {}".format(i, d))
-            while True:
-                idx = input("Select the index of the required device.")
-                if isinstance(idx, int) and idx in range(len(devices)):
-                    self._device = devices[idx]
-                    break
-                else:
-                    print("Unrecognized input value.\n")
-
-        # if just one device is found, select it
-        elif len(devices) == 1:
-            self._device = devices[0]
-
-        # tell the user that no valid devices have been found.
-        else:
-            self._device = None
-
-        # open the found device
-        txt = "No devices called 'PureThermal' have been found."
-        assert self._device is not None, txt
-        self._device = self._device.Open()
-        self._device.sys.RunFFCNormalization()
-
-        # set the gain mode
-        self.set_gain(gain_mode)
-
-        # set radiometric
-        try:
-            self._device.rad.SetTLinearEnableStateChecked(True)
-        except:
-            print("this lepton does not support tlinear")
-
-        # setup the buffer
-        self._reader = IR16Capture()
-        callback = NewBytesFrameEvent(self._add_frame)
-        self._reader.SetupGraphWithBytesCallback(callback)
-
-        # set the sampling frequency
-        txt = "'sampling frequency' must be a value in the (0, 8.5] range."
-        assert isinstance(sampling_frequency, (int, float)), txt
-        assert 0 < sampling_frequency <= 8.5, txt
-        self._dt = int(round(1000.0 / sampling_frequency))
-
-        # path init
-        self._path = os.getcwd()
-
-        # camera widget
-        self._camera_label = qtw.QLabel()
-        self._camera_label.setMouseTracking(True)
-        self._camera_label.installEventFilter(self)
-
-        # fps pane
-        self._fps_label = self._QLabel("")
-        self._fps_label.setFixedWidth(50)
-        fps_pane = self._data_pane("", self._fps_label, "FPS")
-
-        # pointer temperature
-        self._pointer_label = self._QLabel("")
-        self._pointer_label.setFixedWidth(50)
-        pointer_pane = self._data_pane("POINTER", self._pointer_label, "°C")
-
-        # camera pane
-        data_layout = qtw.QHBoxLayout()
-        data_layout.addWidget(fps_pane)
-        data_layout.addWidget(pointer_pane)
-        camera_pane = qtw.QWidget()
-        camera_pane.setLayout(data_layout)
-
-        # button bar with both recording and exit button
-        self._quit_button = qtw.QPushButton("QUIT")
-        self._quit_button.clicked.connect(self._close)
-        self._rec_button = qtw.QPushButton("● START RECORDING", self)
-        self._rec_button.clicked.connect(self._record)
-        self._rec_button.setCheckable(True)
-        button_layout = qtw.QHBoxLayout()
-        button_layout.addWidget(self._rec_button)
-        button_layout.addWidget(self._quit_button)
-        button_pane = qtw.QWidget()
-        button_pane.setLayout(button_layout)
-
-        # main layout
-        main_layout = qtw.QVBoxLayout()
-        main_layout.addWidget(self._camera_label)
-        main_layout.addWidget(camera_pane)
-        main_layout.addWidget(button_pane)
-        self.setLayout(main_layout)
-        self.setWindowTitle("ThermoMetWidget")
-        self.setWindowOpacity(1)
-
-        # stream handlers
-        self._timer = qtc.QTimer()
-        self._timer.timeout.connect(self._update_image)
-
-        # data saving popup
-        save_gif = os.path.sep.join(["_contents", "save.gif"])
-        movie = qtg.QMovie(save_gif)
-        animation = qtw.QLabel()
-        animation.setFixedSize(256, 256)
-        animation.setMovie(movie)
-        movie.start()
-        message = qtw.QLabel("SAVING COLLECTED DATA")
-        message.setAlignment(qtc.Qt.AlignCenter)
-        message.setFont(qtg.QFont("Arial", self._font_size))
-        diag_layout = qtw.QVBoxLayout()
-        diag_layout.addWidget(animation)
-        diag_layout.addWidget(message)
-        diag = qtw.QDialog(self)
-        diag.setModal(True)
-        diag.setLayout(main_layout)
-        diag.setWindowTitle("Please wait.")
-        diag.hide()
-        self._save_popup = diag
-
-    def get_gain(self) -> CCI.Sys.GainMode:
+    @property
+    def gain(self) -> CCI.Sys.GainMode:
         """
         return the actual gain mode.
         """
         return self._device.sys.GetGainMode()
+
+    @property
+    def sampling_frequency(self) -> float:
+        """
+        return the actual sampling frequency
+        """
+        return float(self._sampling_frequency)
+
+    @property
+    def shape(self) -> Tuple[int, int]:
+        """
+        return the shape of the collected images.
+        """
+        return (120, 160)
 
     def set_gain(self, gain_mode: str) -> None:
         """
@@ -212,12 +188,23 @@ class LeptonCamera(qtw.QWidget):
             assert gain_mode in valid_gains, txt
             self._device.sys.SetGainMode(gain_mode)
 
-    @property
-    def shape(self) -> Tuple[int, int]:
+    def set_sampling_frequency(self, sampling_frequency: float) -> None:
         """
-        return the shape of the collected images.
+        set the sampling frequency value and update the _dt argument.
+
+        Parameters
+        ----------
+        sampling_frequency: float, int
+            the new sampling frequency
         """
-        return (120, 160)
+
+        # check the input
+        txt = "'sampling frequency' must be a value in the (0, 8.5] range."
+        assert isinstance(sampling_frequency, (int, float)), txt
+        assert 0 < sampling_frequency <= 8.5, txt
+        self._sampling_frequency = np.round(sampling_frequency, 1)
+        self._dt = int(round(1000.0 / sampling_frequency))
+        self._sampling_frequency_text.insert(str(self._sampling_frequency))
 
     def is_recording(self) -> bool:
         return self._recording
@@ -384,6 +371,151 @@ class LeptonCamera(qtw.QWidget):
             txt = "{} format not supported".format(extension)
             raise TypeError(txt)
 
+    def __init__(
+        self,
+        sampling_frequency: float = 5,
+        gain_mode: str = "HIGH",
+    ) -> None:
+        """
+        constructor
+        """
+        super(LeptonCamera, self).__init__()
+
+        # find a valid device
+        devices = []
+        for i in CCI.GetDevices():
+            if i.Name.startswith("PureThermal"):
+                devices += [i]
+
+        # if multiple devices are found,
+        # allow the user to select the preferred one
+        if len(devices) > 1:
+            print("Multiple Pure Thermal devices have been found.\n")
+            for i, d in enumerate(devices):
+                print("{}. {}".format(i, d))
+            while True:
+                idx = input("Select the index of the required device.")
+                if isinstance(idx, int) and idx in range(len(devices)):
+                    self._device = devices[idx]
+                    break
+                else:
+                    print("Unrecognized input value.\n")
+
+        # if just one device is found, select it
+        elif len(devices) == 1:
+            self._device = devices[0]
+
+        # tell the user that no valid devices have been found.
+        else:
+            self._device = None
+
+        # open the found device
+        txt = "No devices called 'PureThermal' have been found."
+        assert self._device is not None, txt
+        self._device = self._device.Open()
+        self._device.sys.RunFFCNormalization()
+
+        # set the gain mode
+        self.set_gain(gain_mode)
+
+        # set radiometric
+        try:
+            self._device.rad.SetTLinearEnableStateChecked(True)
+        except:
+            print("this lepton does not support tlinear")
+
+        # setup the buffer
+        self._reader = IR16Capture()
+        callback = NewBytesFrameEvent(self._add_frame)
+        self._reader.SetupGraphWithBytesCallback(callback)
+
+        # path init
+        self._path = os.getcwd()
+
+        # camera widget
+        self._camera_label = qtw.QLabel()
+        self._camera_label.setMouseTracking(True)
+        self._camera_label.installEventFilter(self)
+
+        # sampling frequency pane
+        self._sampling_frequency_text = self.QLineEdit("")
+        lbl_font = qtg.QFont("Arial", self._font_size)
+        self._sampling_frequency_text.setFont(lbl_font)
+        self._sampling_frequency_text.setAlignment(qtc.Qt.AlignCenter)
+        self._sampling_frequency_text.setFixedWidth(50)
+        sampling_frequency_pane = self._data_pane(
+            label="SAMPLING FREQUENCY",
+            widget=self._sampling_frequency_text,
+            unit="Hz",
+        )
+        self._sampling_frequency_text.textChanged.connect(
+            self._update_sampling_frequency
+        )
+        self.set_sampling_frequency(sampling_frequency)
+
+        # fps pane
+        self._fps_label = self._QLabel("")
+        self._fps_label.setFixedWidth(50)
+        fps_pane = self._data_pane("", self._fps_label, "FPS")
+
+        # pointer temperature
+        self._pointer_label = self._QLabel("")
+        self._pointer_label.setFixedWidth(50)
+        pointer_pane = self._data_pane("POINTER", self._pointer_label, "°C")
+
+        # camera pane
+        data_layout = qtw.QHBoxLayout()
+        data_layout.addWidget(sampling_frequency_pane)
+        data_layout.addWidget(fps_pane)
+        data_layout.addWidget(pointer_pane)
+        camera_pane = qtw.QWidget()
+        camera_pane.setLayout(data_layout)
+
+        # button bar with both recording and exit button
+        self._quit_button = qtw.QPushButton("QUIT")
+        self._quit_button.clicked.connect(self._close)
+        self._rec_button = qtw.QPushButton("● START RECORDING", self)
+        self._rec_button.clicked.connect(self._record)
+        self._rec_button.setCheckable(True)
+        button_layout = qtw.QHBoxLayout()
+        button_layout.addWidget(self._rec_button)
+        button_layout.addWidget(self._quit_button)
+        button_pane = qtw.QWidget()
+        button_pane.setLayout(button_layout)
+
+        # main layout
+        main_layout = qtw.QVBoxLayout()
+        main_layout.addWidget(self._camera_label)
+        main_layout.addWidget(camera_pane)
+        main_layout.addWidget(button_pane)
+        self.setLayout(main_layout)
+        self.setWindowTitle("ThermoMetWidget")
+        self.setWindowOpacity(1)
+
+        # stream handlers
+        self._timer = qtc.QTimer()
+        self._timer.timeout.connect(self._update_image)
+
+        # data saving popup
+        save_gif = os.path.sep.join(["_contents", "save.gif"])
+        movie = qtg.QMovie(save_gif)
+        animation = qtw.QLabel()
+        animation.setFixedSize(256, 256)
+        animation.setMovie(movie)
+        movie.start()
+        message = qtw.QLabel("SAVING COLLECTED DATA")
+        message.setAlignment(qtc.Qt.AlignCenter)
+        message.setFont(qtg.QFont("Arial", self._font_size))
+        diag_layout = qtw.QVBoxLayout()
+        diag_layout.addWidget(animation)
+        diag_layout.addWidget(message)
+        diag = qtw.QDialog(self)
+        diag.setModal(True)
+        diag.setLayout(main_layout)
+        diag.setWindowTitle("Please wait.")
+        diag.hide()
+        self._save_popup = diag
+
     def _add_frame(
         self,
         array: bytearray,
@@ -535,6 +667,18 @@ class LeptonCamera(qtw.QWidget):
 
         return False
 
+    def _make_message(self, txt):
+        """
+        make an alert message with a given text.
+        """
+        msgBox = qtw.QMessageBox()
+        msgBox.setIcon(qtw.QMessageBox.Warning)
+        msgBox.setText(txt)
+        msgBox.setFont(qtg.QFont("Arial", self._font_size))
+        msgBox.setWindowTitle("ERROR")
+        msgBox.setStandardButtons(qtw.QMessageBox.Ok)
+        msgBox.exec()
+
     def _record(self) -> None:
         """
         start and stop the recording of the data.
@@ -576,13 +720,7 @@ class LeptonCamera(qtw.QWidget):
                         self.save(path)
                         self.path = ".".join(path.split(".")[:-1])
                     except TypeError as err:
-                        msgBox = qtw.QMessageBox()
-                        msgBox.setIcon(qtw.QMessageBox.Warning)
-                        msgBox.setText(err)
-                        msgBox.setFont(qtg.QFont("Arial", self._font_size))
-                        msgBox.setWindowTitle("ERROR")
-                        msgBox.setStandardButtons(qtw.QMessageBox.Ok)
-                        msgBox.exec()
+                        self._make_message(err)
                     finally:
                         self._save_popup.hide()
 
@@ -640,97 +778,19 @@ class LeptonCamera(qtw.QWidget):
             fps_txt = "{:0.1f}".format(self._get_last()["fps"])
             self._fps_label.setText(fps_txt)
 
-    @staticmethod
-    def read_file(filename: str) -> None:
+    def _update_sampling_frequency(self):
         """
-        read the recorded data from file.
-
-        Parameters
-        ----------
-        filename: a valid filename path
-
-        Returns
-        -------
-        obj: dict
-            a dict where each key is a timestamp which contains the
-            corresponding image frame
-
-        Notes
-        -----
-        the file extension is used to desume which file format is used.
-        Available formats are:
-            - ".h5" (gzip format with compression 9)
-            - ".npz" (compressed numpy format)
-            - ".json"
+        update the sampling frequency according to the input value.
         """
+        try:
+            fs = float(self._sampling_frequency_text.text())
+        except Exception:
+            txt = "The inputed sampling frequency is not valid."
+            self._make_message(txt)
+            self.set_sampling_frequency(self._sampling_frequency)
 
-        # check filename and retrieve the file extension
-        assert isinstance(filename, str), "'filename' must be a str object."
-        extension = filename.split(".")[-1].lower()
-
-        # check the extension
-        valid_extensions = np.array(["npz", "json", "h5"])
-        txt = "file extension must be any of " + str(valid_extensions)
-        assert extension in valid_extensions, txt
-
-        # check if the file exists
-        assert os.path.exists(filename), "{} does not exists.".format(filename)
-
-        # datetime converted
-        def to_datetime(txt):
-            return datetime.strptime(txt, "%d-%b-%Y %H:%M:%S.%f")
-
-        # obtain the readed objects
-        if extension == "json":  # json format
-            with open(filename, "r") as buf:
-                obj = json.load(buf)
-            timestamps = list(obj.keys())
-            samples = np.array(list(obj.values())).astype(np.float16)
-
-        elif extension == "npz":  # npz format
-            with np.load(filename) as obj:
-                timestamps = obj["timestamps"]
-                samples = obj["samples"]
-
-        elif extension == "h5":  # h5 format
-            with h5py.File(filename, "r") as obj:
-                timestamps = obj["timestamps"][:].astype(str)
-                samples = obj["samples"][:].astype(np.float16)
-
-        # return the readings as dict
-        return dict(zip(map(to_datetime, timestamps), samples))
-
-    @staticmethod
-    def LeptonApp(
-        high_dpi: bool = True,
-        sampling_frequency: float = 5,
-        gain_mode: str = "HIGH",
-    ) -> None:
-        """
-        Create a PySide2.QApplication embedding the LeptonCamera.
-
-        Parameters
-        ----------
-        high_dpi: bool
-            should the application be rendered considering high dpi screens?
-
-        sampling_frequency: float, int
-            the sampling frequency in Hz for the camera readings.
-            It must be <= 8.5 Hz.
-
-        gain_mode: str or CCI.Sys.GainMode enum
-            any between "LOW", "HIGH" or
-            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
-        """
-        # highdpi scaling
-        qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, high_dpi)
-        qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, high_dpi)
-
-        # app generation
-        app = qtw.QApplication(sys.argv)
-        camera = LeptonCamera(
-            sampling_frequency=sampling_frequency,
-            gain_mode=gain_mode,
-        )
-        camera.show()
-        sys.exit(app.exec_())
+        if fs <= 0 or fs > 8.5:
+            txt = "Sampling frequency must be in the (0, 8.5] range."
+            self._make_message(txt)
+            self.set_sampling_frequency(self._sampling_frequency)
+        self.set_sampling_frequency(fs)
