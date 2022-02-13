@@ -7,41 +7,54 @@ from IR16Filters import IR16Capture, NewBytesFrameEvent
 from threading import Thread
 from datetime import datetime
 from typing import Tuple
+import PySide2.QtWidgets as qtw
+import PySide2.QtCore as qtc
+import PySide2.QtGui as qtg
+import qimage2ndarray
 import numpy as np
 import h5py
 import json
+import sys
+import cv2
 import os
 
 
-class LeptonCamera:
+class LeptonCamera(qtw.QWidget):
     """
     Initialize a Lepton camera object capable of communicating to
     an pure thermal device equipped with a lepton 3.5 sensor.
 
     Parameters
     ----------
-    gain_mode: str
-        any between "LOW" or "HIGH". It defines the gain mode of the lepton
-        camera.
+    sampling_frequency: float, int
+        the sampling frequency in Hz for the camera readings.
+        It must be <= 8.5 Hz.
+
+    gain_mode: str or CCI.Sys.GainMode enum
+        any between "LOW", "HIGH" or
+        CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
     """
 
     # class variables
-    device = None
-    reader = None
+    _device = None
+    _reader = None
     _data = {}
     _recording = False
     _last = None
-    time_format = "%d-%b-%Y %H:%M:%S.%f"
+    _dt = None
+    _last_dt = None
+    _time_format = "%d-%b-%Y %H:%M:%S.%f"
+    _image_multiplier = 2
+    _path = ""
+    _font_size = 12
 
-    def __init__(self, gain_mode: str = "HIGH") -> None:
+    def __init__(
+        self,
+        sampling_frequency: float = 5,
+        gain_mode: str = "HIGH",
+    ) -> None:
         """
         constructor
-
-        Parameters
-        ----------
-        gain_mode: str or CCI.Sys.GainMode enum
-            any between "LOW", "HIGH" or
-            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
         """
         super(LeptonCamera, self).__init__()
 
@@ -60,44 +73,120 @@ class LeptonCamera:
             while True:
                 idx = input("Select the index of the required device.")
                 if isinstance(idx, int) and idx in range(len(devices)):
-                    self.device = devices[idx]
+                    self._device = devices[idx]
                     break
                 else:
                     print("Unrecognized input value.\n")
 
         # if just one device is found, select it
         elif len(devices) == 1:
-            self.device = devices[0]
+            self._device = devices[0]
 
         # tell the user that no valid devices have been found.
         else:
-            self.device = None
+            self._device = None
 
         # open the found device
         txt = "No devices called 'PureThermal' have been found."
-        assert self.device is not None, txt
-        self.device = self.device.Open()
-        self.device.sys.RunFFCNormalization()
+        assert self._device is not None, txt
+        self._device = self._device.Open()
+        self._device.sys.RunFFCNormalization()
 
         # set the gain mode
         self.set_gain(gain_mode)
 
         # set radiometric
         try:
-            self.device.rad.SetTLinearEnableStateChecked(True)
+            self._device.rad.SetTLinearEnableStateChecked(True)
         except:
             print("this lepton does not support tlinear")
 
         # setup the buffer
-        self.reader = IR16Capture()
+        self._reader = IR16Capture()
         callback = NewBytesFrameEvent(self._add_frame)
-        self.reader.SetupGraphWithBytesCallback(callback)
+        self._reader.SetupGraphWithBytesCallback(callback)
+
+        # set the sampling frequency
+        txt = "'sampling frequency' must be a value in the (0, 8.5] range."
+        assert isinstance(sampling_frequency, (int, float)), txt
+        assert 0 < sampling_frequency <= 8.5, txt
+        self._dt = int(round(1000.0 / sampling_frequency))
+
+        # path init
+        self._path = os.getcwd()
+
+        # camera widget
+        self._camera_label = qtw.QLabel()
+        self._camera_label.setMouseTracking(True)
+        self._camera_label.installEventFilter(self)
+
+        # fps pane
+        self._fps_label = self._QLabel("")
+        self._fps_label.setFixedWidth(50)
+        fps_pane = self._data_pane("", self._fps_label, "FPS")
+
+        # pointer temperature
+        self._pointer_label = self._QLabel("")
+        self._pointer_label.setFixedWidth(50)
+        pointer_pane = self._data_pane("POINTER", self._pointer_label, "°C")
+
+        # camera pane
+        data_layout = qtw.QHBoxLayout()
+        data_layout.addWidget(fps_pane)
+        data_layout.addWidget(pointer_pane)
+        camera_pane = qtw.QWidget()
+        camera_pane.setLayout(data_layout)
+
+        # button bar with both recording and exit button
+        self._quit_button = qtw.QPushButton("QUIT")
+        self._quit_button.clicked.connect(self._close)
+        self._rec_button = qtw.QPushButton("● START RECORDING", self)
+        self._rec_button.clicked.connect(self._record)
+        self._rec_button.setCheckable(True)
+        button_layout = qtw.QHBoxLayout()
+        button_layout.addWidget(self._rec_button)
+        button_layout.addWidget(self._quit_button)
+        button_pane = qtw.QWidget()
+        button_pane.setLayout(button_layout)
+
+        # main layout
+        main_layout = qtw.QVBoxLayout()
+        main_layout.addWidget(self._camera_label)
+        main_layout.addWidget(camera_pane)
+        main_layout.addWidget(button_pane)
+        self.setLayout(main_layout)
+        self.setWindowTitle("ThermoMetWidget")
+        self.setWindowOpacity(1)
+
+        # stream handlers
+        self._timer = qtc.QTimer()
+        self._timer.timeout.connect(self._update_image)
+
+        # data saving popup
+        save_gif = os.path.sep.join(["_contents", "save.gif"])
+        movie = qtg.QMovie(save_gif)
+        animation = qtw.QLabel()
+        animation.setFixedSize(256, 256)
+        animation.setMovie(movie)
+        movie.start()
+        message = qtw.QLabel("SAVING COLLECTED DATA")
+        message.setAlignment(qtc.Qt.AlignCenter)
+        message.setFont(qtg.QFont("Arial", self._font_size))
+        diag_layout = qtw.QVBoxLayout()
+        diag_layout.addWidget(animation)
+        diag_layout.addWidget(message)
+        diag = qtw.QDialog(self)
+        diag.setModal(True)
+        diag.setLayout(main_layout)
+        diag.setWindowTitle("Please wait.")
+        diag.hide()
+        self._save_popup = diag
 
     def get_gain(self) -> CCI.Sys.GainMode:
         """
         return the actual gain mode.
         """
-        return self.device.sys.GetGainMode()
+        return self._device.sys.GetGainMode()
 
     def set_gain(self, gain_mode: str) -> None:
         """
@@ -114,81 +203,26 @@ class LeptonCamera:
         if isinstance(gain_mode, str):
             assert gain_mode.upper() in ["HIGH", "LOW"], txt
             if gain_mode == "HIGH":
-                self.device.sys.SetGainMode(CCI.Sys.GainMode.HIGH)
+                self._device.sys.SetGainMode(CCI.Sys.GainMode.HIGH)
             else:
-                self.device.sys.SetGainMode(CCI.Sys.GainMode.LOW)
+                self._device.sys.SetGainMode(CCI.Sys.GainMode.LOW)
         else:
             valid_gains = [CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW]
             txt += " or any of {}".format(valid_gains)
             assert gain_mode in valid_gains, txt
-            self.device.sys.SetGainMode(gain_mode)
+            self._device.sys.SetGainMode(gain_mode)
 
-    def _add_frame(self, array: bytearray, width: int, height: int) -> None:
-        """
-        add a new frame to the buffer of readed data.
-        """
-
-        # get the sampling timestamp
-        dt = datetime.now()
-        timestamp = dt.strftime(self.time_format)
-
-        # parse the thermal data to become a readable numpy array
-        img = np.fromiter(array, dtype="uint16").reshape(height, width)
-        img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
-        img = img.astype(np.float16)
-
-        # get the recording time
-        if len(self._data) > 1:
-            keys = [i for i in self._data.keys()]
-            t0 = datetime.strptime(keys[0], self.time_format)
-            delta = (dt - t0).total_seconds()
-            h = int(delta // 3600)
-            m = int((delta - h * 3600) // 60)
-            s = int((delta - h * 3600 - m * 60) // 1)
-            d = int(((delta % 1) * 1e6) // 1e5)
-            lapsed = "{:02d}:{:02d}:{:02d}.{:01d}".format(h, m, s, d)
-        else:
-            lapsed = "00:00:00.0"
-
-        # get the fps
-        if self._last is None:
-            fps = 0.0
-        else:
-            t1 = datetime.strptime(self._last["timestamp"], self.time_format)
-            fps = 1.0 / (dt - t1).total_seconds()
-
-        # update the last reading
-        labels = ["timestamp", "image", "fps", "recording_time"]
-        values = [timestamp, img, fps, lapsed]
-        self._last = {i: j for i, j in zip(labels, values)}
-
-        # update the list of collected data
-        if self.is_recording():
-            self._data[timestamp] = img.astype(np.float16)
-
-    def get_last(self) -> dict:
-        """
-        return the last sampled data.
-        """
-        return self._last
-
-    def get_shape(self) -> Tuple[int, int]:
+    @property
+    def shape(self) -> Tuple[int, int]:
         """
         return the shape of the collected images.
         """
         return (120, 160)
 
-    @property
-    def aspect_ratio(self) -> float:
-        shape = self.get_shape()
-        if shape is None:
-            return None
-        return shape[1] / shape[0]
-
     def is_recording(self) -> bool:
         return self._recording
 
-    def capture(
+    def start(
         self,
         save: bool = True,
         n_frames: Tuple[int, None] = None,
@@ -215,10 +249,11 @@ class LeptonCamera:
 
         # start reading data
         assert save or not save, "save must be a bool"
-        self.reader.RunGraph()
-        while self.get_last() is None:
+        self._reader.RunGraph()
+        while self._get_last() is None:
             pass
         self._recording = save
+        self._timer.start(self._dt)
 
         # continue reading until a stopping criterion is met
         if time is not None:
@@ -248,7 +283,8 @@ class LeptonCamera:
         stop reading from camera.
         """
         self._recording = False
-        self.reader.StopGraph()
+        self._reader.StopGraph()
+        self._timer.stop()
 
     def clear(self) -> None:
         """
@@ -348,6 +384,262 @@ class LeptonCamera:
             txt = "{} format not supported".format(extension)
             raise TypeError(txt)
 
+    def _add_frame(
+        self,
+        array: bytearray,
+        width: int,
+        height: int,
+    ) -> None:
+        """
+        add a new frame to the buffer of readed data.
+        """
+
+        # get the sampling timestamp
+        dt = datetime.now()
+
+        # check if enough time has passes since the last sample
+        if self._last_dt is None:
+            timedelta = self._dt
+        else:
+            timedelta = dt - self._last_dt
+        if int(round(timedelta.total_seconds() * 1000)) >= self._dt:
+
+            # update the last_dt
+            self._last_dt = dt
+
+            # get the timestamp
+            timestamp = dt.strftime(self._time_format)
+
+            # get the recording time
+            if len(self._data) > 1:
+                keys = [i for i in self._data.keys()]
+                t0 = datetime.strptime(keys[0], self._time_format)
+                delta = (dt - t0).total_seconds()
+                h = int(delta // 3600)
+                m = int((delta - h * 3600) // 60)
+                s = int((delta - h * 3600 - m * 60) // 1)
+                d = int(((delta % 1) * 1e6) // 1e5)
+                lapsed = "{:02d}:{:02d}:{:02d}.{:01d}".format(h, m, s, d)
+            else:
+                lapsed = "00:00:00.0"
+
+            # parse the thermal data to become a readable numpy array
+            img = np.fromiter(array, dtype="uint16").reshape(height, width)
+            img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
+            img = img.astype(np.float16)
+
+            # get the fps
+            fps = 1.0 / timedelta.total_seconds()
+
+            # update the last reading
+            labels = ["timestamp", "image", "fps", "recording_time"]
+            values = [timestamp, img, fps, lapsed]
+            self._last = dict(zip(labels, values))
+
+            # update the list of collected data
+            if self.is_recording():
+                self._data[timestamp] = img
+
+    def _get_last(self) -> dict:
+        """
+        return the last sampled data.
+        """
+        return self._last
+
+    def _QLabel(
+        self,
+        text: str,
+        alignment: str = "center",
+    ) -> None:
+        """
+        shortcut to QLabel creation with custom settings
+        """
+        lbl = qtw.QLabel(text)
+        lbl.setFont(qtg.QFont("Arial", self._font_size))
+        if alignment.lower() == "center":
+            lbl.setAlignment(qtc.Qt.AlignCenter)
+        elif alignment.lower() == "left":
+            lbl.setAlignment(qtc.Qt.AlignLeft)
+        elif alignment.lower() == "right":
+            lbl.setAlignment(qtc.Qt.AlignRight)
+        else:
+            txt = "aligment must be any between left, center, right."
+            raise ValueError(txt)
+        return lbl
+
+    def _data_pane(
+        self,
+        label: str,
+        widget: qtw.QWidget,
+        unit: str,
+    ) -> None:
+        """
+        generate a widget allowing the visualization of one value.
+
+        Parameters
+        ----------
+        label: str
+            the name of the value
+
+        widget: qtw.QWidget
+            the object effectively visualizing the value.
+
+        unit: str
+            the unit of measurement of the value.
+
+        Returns
+        -------
+        wdg: qtw.QWidget
+            a line with the label, the object and the unit of
+            measurement formatted.
+        """
+        layout = qtw.QHBoxLayout()
+        title = self._QLabel(label, "right")
+        title.setFixedWidth(125)
+        layout.addWidget(title)
+        layout.addWidget(widget)
+        unit = self._QLabel(unit, "left")
+        unit.setFixedWidth(100)
+        layout.addWidget(unit)
+        pane = qtw.QWidget()
+        pane.setLayout(layout)
+        return pane
+
+    def _update_pointer_temp(
+        self,
+        source: qtw.QWidget,
+        event: qtc.QEvent,
+    ) -> None:
+        """
+        calculate the temperature-related numbers.
+        """
+        if self._get_last() is not None:
+
+            # check if the pointer is on the image and update pointer
+            # temperature
+            if event.type() == qtc.QEvent.MouseMove:
+                x, y = (event.x(), event.y())  # get the mouse coordinates
+
+                # rescale to the original image size
+                w_res = int(x * self.shape[1] / self._camera_label.width())
+                h_res = int(y * self.shape[0] / self._camera_label.height())
+
+                # update data_label with the temperature at mouse position
+                temp = self._get_last()["image"][h_res, w_res]
+                self._pointer_label.setText("{:0.1f}".format(temp))
+
+            # the pointer leaves the image, therefore no temperature
+            # has to be shown
+            elif event.type() == qtc.QEvent.Leave:
+                self._pointer_label.setText("")
+
+        return False
+
+    def _record(self) -> None:
+        """
+        start and stop the recording of the data.
+        """
+        if self._rec_button.isChecked():
+            self._rec_button.setText("■ STOP RECORDING")
+            self._recording = True
+        else:
+            self._rec_button.setText("● START RECORDING")
+            self._recording = False
+            if len(self._data) > 0:
+
+                # stop the reading
+                self.stop()
+
+                # let the user decide where to save the data
+                file_filters = "H5 (*.h5)"
+                file_filters += ";;NPZ (*.npz)"
+                file_filters += ";;JSON (*.json)"
+                options = qtw.QFileDialog.Options()
+                options |= qtw.QFileDialog.DontUseNativeDialog
+                path, ext = qtw.QFileDialog.getSaveFileName(
+                    parent=self,
+                    filter=file_filters,
+                    dir=self.path,
+                    options=options,
+                )
+
+                # prepare the data
+                if len(path) > 0:
+                    path = path.replace("/", os.path.sep)
+                    ext = ext.split(" ")[0].lower()
+                    if not path.endswith(ext):
+                        path += "." + ext
+
+                    # save data
+                    try:
+                        self._save_popup.show()
+                        self.save(path)
+                        self.path = ".".join(path.split(".")[:-1])
+                    except TypeError as err:
+                        msgBox = qtw.QMessageBox()
+                        msgBox.setIcon(qtw.QMessageBox.Warning)
+                        msgBox.setText(err)
+                        msgBox.setFont(qtg.QFont("Arial", self._font_size))
+                        msgBox.setWindowTitle("ERROR")
+                        msgBox.setStandardButtons(qtw.QMessageBox.Ok)
+                        msgBox.exec()
+                    finally:
+                        self._save_popup.hide()
+
+                # reset the camera buffer and restart the data streaming
+                self.clear()
+                self.start()
+
+    def _close(self) -> None:
+        """
+        terminate the app.
+        """
+        sys.exit()
+
+    def _update_image(self) -> None:
+        """
+        display the last captured images.
+        """
+        if self._get_last() is not None:
+
+            # get the image
+            img = self._get_last()["image"]
+
+            # convert to bone scale (flip the values)
+            gry = (1 - (img - np.min(img)) / (np.max(img) - np.min(img))) * 255
+            gry = np.expand_dims(gry, 2).astype(np.uint8)
+            gry = cv2.merge([gry, gry, gry])
+            gry = cv2.applyColorMap(gry, cv2.COLORMAP_BONE)
+
+            # converto to heatmap
+            heatmap = cv2.applyColorMap(gry, cv2.COLORMAP_JET)
+
+            # resize preserving the aspect ratio
+            h = int(self._image_multiplier * img.shape[0])
+            w = int(self._image_multiplier * img.shape[1])
+            img_resized = cv2.resize(heatmap, (w, h))
+
+            # set the recording overlay if required
+            if self.is_recording():
+                cv2.putText(
+                    img_resized,
+                    "REC: {}".format(self._get_last()["recording_time"]),
+                    (10, int(h * 0.95)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (255, 255, 255),
+                    2,
+                    2,
+                )
+
+            # update the view
+            qimage = qimage2ndarray.array2qimage(img_resized)
+            self._camera_label.setPixmap(qtg.QPixmap.fromImage(qimage))
+
+            # update fps
+            fps_txt = "{:0.1f}".format(self._get_last()["fps"])
+            self._fps_label.setText(fps_txt)
+
     @staticmethod
     def read_file(filename: str) -> None:
         """
@@ -407,3 +699,38 @@ class LeptonCamera:
 
         # return the readings as dict
         return dict(zip(map(to_datetime, timestamps), samples))
+
+    @staticmethod
+    def LeptonApp(
+        high_dpi: bool = True,
+        sampling_frequency: float = 5,
+        gain_mode: str = "HIGH",
+    ) -> None:
+        """
+        Create a PySide2.QApplication embedding the LeptonCamera.
+
+        Parameters
+        ----------
+        high_dpi: bool
+            should the application be rendered considering high dpi screens?
+
+        sampling_frequency: float, int
+            the sampling frequency in Hz for the camera readings.
+            It must be <= 8.5 Hz.
+
+        gain_mode: str or CCI.Sys.GainMode enum
+            any between "LOW", "HIGH" or
+            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
+        """
+        # highdpi scaling
+        qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, high_dpi)
+        qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, high_dpi)
+
+        # app generation
+        app = qtw.QApplication(sys.argv)
+        camera = LeptonCamera(
+            sampling_frequency=sampling_frequency,
+            gain_mode=gain_mode,
+        )
+        camera.show()
+        sys.exit(app.exec_())
