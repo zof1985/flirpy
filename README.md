@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 from flirpy import LeptonCamera
 
 camera = LeptonCamera(sampling_frequency=5) # inizialize the camera object
-camera.capture(n_frames=10) # capture 10 frames
+camera.capture_start(n_frames=10) # capture 10 frames
 timestamps, images = camera.to_numpy()  # obtain the outcomes as numpy arrays.
 for time, img in zip(timestamps, images):
     plt.imshow(img)
