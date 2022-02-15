@@ -1,0 +1,6 @@
+pythonnet
+PySide2
+qimage2ndarray
+numpy
+h5py
+opencv-python

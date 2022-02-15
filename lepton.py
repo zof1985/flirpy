@@ -19,7 +19,7 @@ import cv2
 import os
 
 
-class LeptonCamera(qtw.QWidget):
+class LeptonCamera:
     """
     Initialize a Lepton camera object capable of communicating to
     an pure thermal device equipped with a lepton 3.5 sensor.
@@ -29,10 +29,6 @@ class LeptonCamera(qtw.QWidget):
     sampling_frequency: float, int
         the sampling frequency in Hz for the camera readings.
         It must be <= 8.5 Hz.
-
-    gain_mode: str or CCI.Sys.GainMode enum
-        any between "LOW", "HIGH" or
-        CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
     """
 
     # class variables
@@ -41,12 +37,190 @@ class LeptonCamera(qtw.QWidget):
     _data = {}
     _recording = False
     _last = None
-    _dt = None
+    _dt = 200
     _last_dt = None
-    _time_format = "%d-%b-%Y %H:%M:%S.%f"
-    _image_multiplier = 2
+    _sampling_frequency = 5
+    _time_format = "%H:%M:%S.%f"
+    _date_format = "%Y-%b-%d " + _time_format
     _path = ""
-    _font_size = 12
+
+    def __init__(
+        self,
+        sampling_frequency: float = 5,
+        gain_mode: str = "HIGH",
+    ) -> None:
+        """
+        constructor
+        """
+        super(LeptonCamera, self).__init__()
+
+        # find a valid device
+        devices = []
+        for i in CCI.GetDevices():
+            if i.Name.startswith("PureThermal"):
+                devices += [i]
+
+        # if multiple devices are found,
+        # allow the user to select the preferred one
+        if len(devices) > 1:
+            print("Multiple Pure Thermal devices have been found.\n")
+            for i, d in enumerate(devices):
+                print("{}. {}".format(i, d))
+            while True:
+                idx = input("Select the index of the required device.")
+                if isinstance(idx, int) and idx in range(len(devices)):
+                    self._device = devices[idx]
+                    break
+                else:
+                    print("Unrecognized input value.\n")
+
+        # if just one device is found, select it
+        elif len(devices) == 1:
+            self._device = devices[0]
+
+        # tell the user that no valid devices have been found.
+        else:
+            self._device = None
+
+        # open the found device
+        txt = "No devices called 'PureThermal' have been found."
+        assert self._device is not None, txt
+        self._device = self._device.Open()
+        self._device.sys.RunFFCNormalization()
+
+        # set the gain mode
+        self._device.sys.SetGainMode(CCI.Sys.GainMode.HIGH)
+
+        # set radiometric
+        try:
+            self._device.rad.SetTLinearEnableStateChecked(True)
+        except:
+            print("this lepton does not support tlinear")
+
+        # setup the buffer
+        self._reader = IR16Capture()
+        callback = NewBytesFrameEvent(self._add_frame)
+        self._reader.SetupGraphWithBytesCallback(callback)
+
+        # path init
+        self._path = os.getcwd()
+
+        # set the sampling frequency
+        self.set_sampling_frequency(sampling_frequency)
+
+    def _add_frame(
+        self,
+        array: bytearray,
+        width: int,
+        height: int,
+    ) -> None:
+        """
+        add a new frame to the buffer of readed data.
+        """
+
+        # get the sampling timestamp
+        dt = datetime.now()
+
+        # check if enough time has passes since the last sample
+        if self._last_dt is None:
+            delta_msec = 0
+            timedelta = dt - dt
+        else:
+            timedelta = dt - self._last_dt
+            delta_msec = int(round(timedelta.total_seconds() * 1000))
+        if delta_msec >= self._dt:
+
+            # update the last_dt
+            self._last_dt = dt
+
+            # get the timestamps
+            timestamp = dt.strftime(self._date_format)
+            lapsed = timedelta.strftime(self._time_format)
+
+            # parse the thermal data to become a readable numpy array
+            img = np.fromiter(array, dtype="uint16").reshape(height, width)
+            img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
+            img = img.astype(np.float16)
+
+            # get the fps
+            fps = timedelta.total_seconds() ** (-1)
+
+            # update the last reading
+            labels = ["timestamp", "image", "fps", "recording_time"]
+            values = [timestamp, img, fps, lapsed]
+            self._last = dict(zip(labels, values))
+
+            # update the list of collected data
+            if self.is_recording():
+                self._data[timestamp] = img
+
+    def _get_last(self) -> dict:
+        """
+        return the last sampled data.
+        """
+        return self._last
+
+    def capture_start(
+        self,
+        save: bool = True,
+        n_frames: Tuple[int, None] = None,
+        time: Tuple[int, None] = None,
+    ) -> None:
+        """
+        record a series of frames from the camera.
+
+        Parameters
+        ----------
+        save: bool
+            if true the data are stored, otherwise nothing except
+            "last" is updated.
+
+        n_frames: None / int
+            if a positive int is provided, n_frames are captured.
+            Otherwise, all the frames collected are saved until the
+            stop command is given.
+
+        time: None / int
+            if a positive int is provided, data is sampled for the indicated
+            amount of seconds.
+        """
+
+        # start reading data
+        assert save or not save, "save must be a bool"
+        self._reader.RunGraph()
+        while self._get_last() is None:
+            pass
+        self._recording = save
+
+        # continue reading until a stopping criterion is met
+        if time is not None:
+
+            def stop_reading(time):
+                if len(self._data) > 0:
+                    keys = [i for i in self._data]
+                    t0 = keys[0]
+                    t1 = keys[-1]
+                    if (t1 - t0).total_seconds() >= time:
+                        self.stop()
+
+            t = Thread(target=stop_reading, args=[time])
+            t.run()
+
+        elif n_frames is not None:
+
+            def stop_reading(n_frames):
+                if len(self._data) >= n_frames:
+                    self.stop()
+
+            t = Thread(target=stop_reading, args=[n_frames])
+            t.run()
+
+    def capture_stop(self) -> None:
+        """
+        stop reading from camera.
+        """
+        self._recording = False
+        self._reader.StopGraph()
 
     @staticmethod
     def read_file(filename: str) -> None:
@@ -108,48 +282,6 @@ class LeptonCamera(qtw.QWidget):
         # return the readings as dict
         return dict(zip(map(to_datetime, timestamps), samples))
 
-    @staticmethod
-    def LeptonApp(
-        high_dpi: bool = True,
-        sampling_frequency: float = 5,
-        gain_mode: str = "HIGH",
-    ) -> None:
-        """
-        Create a PySide2.QApplication embedding the LeptonCamera.
-
-        Parameters
-        ----------
-        high_dpi: bool
-            should the application be rendered considering high dpi screens?
-
-        sampling_frequency: float, int
-            the sampling frequency in Hz for the camera readings.
-            It must be <= 8.5 Hz.
-
-        gain_mode: str or CCI.Sys.GainMode enum
-            any between "LOW", "HIGH" or
-            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
-        """
-        # highdpi scaling
-        qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, high_dpi)
-        qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, high_dpi)
-
-        # app generation
-        app = qtw.QApplication(sys.argv)
-        camera = LeptonCamera(
-            sampling_frequency=sampling_frequency,
-            gain_mode=gain_mode,
-        )
-        camera.show()
-        sys.exit(app.exec_())
-
-    @property
-    def gain(self) -> CCI.Sys.GainMode:
-        """
-        return the actual gain mode.
-        """
-        return self._device.sys.GetGainMode()
-
     @property
     def sampling_frequency(self) -> float:
         """
@@ -163,30 +295,6 @@ class LeptonCamera(qtw.QWidget):
         return the shape of the collected images.
         """
         return (120, 160)
-
-    def set_gain(self, gain_mode: str) -> None:
-        """
-        set the gain mode of the current device
-
-        Parameters
-        ----------
-        gain_mode: str or GainMode enum
-            any between "LOW", "HIGH" or
-            CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW.
-        """
-
-        txt = "gain_mode must be a string (either 'LOW' or 'HIGH')"
-        if isinstance(gain_mode, str):
-            assert gain_mode.upper() in ["HIGH", "LOW"], txt
-            if gain_mode == "HIGH":
-                self._device.sys.SetGainMode(CCI.Sys.GainMode.HIGH)
-            else:
-                self._device.sys.SetGainMode(CCI.Sys.GainMode.LOW)
-        else:
-            valid_gains = [CCI.Sys.GainMode.HIGH, CCI.Sys.GainMode.LOW]
-            txt += " or any of {}".format(valid_gains)
-            assert gain_mode in valid_gains, txt
-            self._device.sys.SetGainMode(gain_mode)
 
     def set_sampling_frequency(self, sampling_frequency: float) -> None:
         """
@@ -204,76 +312,11 @@ class LeptonCamera(qtw.QWidget):
         assert 0 < sampling_frequency <= 8.5, txt
         self._sampling_frequency = np.round(sampling_frequency, 1)
         self._dt = int(round(1000.0 / sampling_frequency))
-        self._sampling_frequency_text.insert(str(self._sampling_frequency))
 
     def is_recording(self) -> bool:
         return self._recording
 
-    def start(
-        self,
-        save: bool = True,
-        n_frames: Tuple[int, None] = None,
-        time: Tuple[int, None] = None,
-    ) -> None:
-        """
-        record a series of frames from the camera.
-
-        Parameters
-        ----------
-        save: bool
-            if true the data are stored, otherwise nothing except
-            "last" is updated.
-
-        n_frames: None / int
-            if a positive int is provided, n_frames are captured.
-            Otherwise, all the frames collected are saved until the
-            stop command is given.
-
-        time: None / int
-            if a positive int is provided, data is sampled for the indicated
-            amount of seconds.
-        """
-
-        # start reading data
-        assert save or not save, "save must be a bool"
-        self._reader.RunGraph()
-        while self._get_last() is None:
-            pass
-        self._recording = save
-        self._timer.start(self._dt)
-
-        # continue reading until a stopping criterion is met
-        if time is not None:
-
-            def stop_reading(time):
-                if len(self._data) > 0:
-                    keys = [i for i in self._data]
-                    t0 = keys[0]
-                    t1 = keys[-1]
-                    if (t1 - t0).total_seconds() >= time:
-                        self.stop()
-
-            t = Thread(target=stop_reading, args=[time])
-            t.run()
-
-        elif n_frames is not None:
-
-            def stop_reading(n_frames):
-                if len(self._data) >= n_frames:
-                    self.stop()
-
-            t = Thread(target=stop_reading, args=[n_frames])
-            t.run()
-
-    def stop(self) -> None:
-        """
-        stop reading from camera.
-        """
-        self._recording = False
-        self._reader.StopGraph()
-        self._timer.stop()
-
-    def clear(self) -> None:
+    def clear_memory(self) -> None:
         """
         clear the current object memory and buffer
         """
@@ -371,66 +414,102 @@ class LeptonCamera(qtw.QWidget):
             txt = "{} format not supported".format(extension)
             raise TypeError(txt)
 
-    def __init__(
-        self,
-        sampling_frequency: float = 5,
-        gain_mode: str = "HIGH",
-    ) -> None:
+
+class LeptonCameraWidget(qtw.QWidget):
+    """
+    Initialize a PySide2 widget capable of communicating to
+    an pure thermal device equipped with a lepton 3.5 sensor.
+
+    Parameters
+    ----------
+    sampling_frequency: float, int
+        the sampling frequency in Hz for the camera readings.
+        It must be <= 8.5 Hz.
+    """
+
+    # lepton camera
+    _camera = None
+
+    # class variables
+    _image_multiplier = 2
+    _font_size = 12
+
+    # qt timer
+    _timer = None
+
+    # widgets
+    _sampling_frequency_text = None
+    _camera_label = None
+    _fps_label = None
+    _pointer_label = None
+    _quit_button = None
+    _rec_button = None
+
+    # dialogs
+    _save_poput = None
+
+    @staticmethod
+    def read_file(filename: str) -> None:
+        """
+        read the recorded data from file.
+
+        Parameters
+        ----------
+        filename: a valid filename path
+
+        Returns
+        -------
+        obj: dict
+            a dict where each key is a timestamp which contains the
+            corresponding image frame
+
+        Notes
+        -----
+        the file extension is used to desume which file format is used.
+        Available formats are:
+            - ".h5" (gzip format with compression 9)
+            - ".npz" (compressed numpy format)
+            - ".json"
+        """
+        return LeptonCamera.read_file(filename=filename)
+
+    @property
+    def sampling_frequency(self) -> float:
+        """
+        return the actual sampling frequency
+        """
+        return float(self._camera._sampling_frequency)
+
+    @property
+    def shape(self) -> Tuple[int, int]:
+        """
+        return the shape of the collected images.
+        """
+        return self._camera.shape
+
+    def set_sampling_frequency(self, sampling_frequency: float) -> None:
+        """
+        set the sampling frequency value and update the _dt argument.
+
+        Parameters
+        ----------
+        sampling_frequency: float, int
+            the new sampling frequency
+        """
+
+        # check the input
+        self._camera.set_sampling_frequency(sampling_frequency)
+        self._sampling_frequency_text.insert(str(self._sampling_frequency))
+
+    def __init__(self, sampling_frequency: float = 5) -> None:
         """
         constructor
         """
-        super(LeptonCamera, self).__init__()
+        super(LeptonCameraWidget, self).__init__()
 
-        # find a valid device
-        devices = []
-        for i in CCI.GetDevices():
-            if i.Name.startswith("PureThermal"):
-                devices += [i]
-
-        # if multiple devices are found,
-        # allow the user to select the preferred one
-        if len(devices) > 1:
-            print("Multiple Pure Thermal devices have been found.\n")
-            for i, d in enumerate(devices):
-                print("{}. {}".format(i, d))
-            while True:
-                idx = input("Select the index of the required device.")
-                if isinstance(idx, int) and idx in range(len(devices)):
-                    self._device = devices[idx]
-                    break
-                else:
-                    print("Unrecognized input value.\n")
-
-        # if just one device is found, select it
-        elif len(devices) == 1:
-            self._device = devices[0]
-
-        # tell the user that no valid devices have been found.
-        else:
-            self._device = None
-
-        # open the found device
-        txt = "No devices called 'PureThermal' have been found."
-        assert self._device is not None, txt
-        self._device = self._device.Open()
-        self._device.sys.RunFFCNormalization()
-
-        # set the gain mode
-        self.set_gain(gain_mode)
-
-        # set radiometric
-        try:
-            self._device.rad.SetTLinearEnableStateChecked(True)
-        except:
-            print("this lepton does not support tlinear")
-
-        # setup the buffer
-        self._reader = IR16Capture()
-        callback = NewBytesFrameEvent(self._add_frame)
-        self._reader.SetupGraphWithBytesCallback(callback)
-
-        # path init
-        self._path = os.getcwd()
+        # set the lepton camera object
+        self._camera = LeptonCamera(sampling_frequency=sampling_frequency)
+        self._camera.capture_start(save=False)
 
         # camera widget
         self._camera_label = qtw.QLabel()
@@ -516,68 +595,6 @@ class LeptonCamera(qtw.QWidget):
         diag.hide()
         self._save_popup = diag
 
-    def _add_frame(
-        self,
-        array: bytearray,
-        width: int,
-        height: int,
-    ) -> None:
-        """
-        add a new frame to the buffer of readed data.
-        """
-
-        # get the sampling timestamp
-        dt = datetime.now()
-
-        # check if enough time has passes since the last sample
-        if self._last_dt is None:
-            timedelta = self._dt
-        else:
-            timedelta = dt - self._last_dt
-        if int(round(timedelta.total_seconds() * 1000)) >= self._dt:
-
-            # update the last_dt
-            self._last_dt = dt
-
-            # get the timestamp
-            timestamp = dt.strftime(self._time_format)
-
-            # get the recording time
-            if len(self._data) > 1:
-                keys = [i for i in self._data.keys()]
-                t0 = datetime.strptime(keys[0], self._time_format)
-                delta = (dt - t0).total_seconds()
-                h = int(delta // 3600)
-                m = int((delta - h * 3600) // 60)
-                s = int((delta - h * 3600 - m * 60) // 1)
-                d = int(((delta % 1) * 1e6) // 1e5)
-                lapsed = "{:02d}:{:02d}:{:02d}.{:01d}".format(h, m, s, d)
-            else:
-                lapsed = "00:00:00.0"
-
-            # parse the thermal data to become a readable numpy array
-            img = np.fromiter(array, dtype="uint16").reshape(height, width)
-            img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
-            img = img.astype(np.float16)
-
-            # get the fps
-            fps = 1.0 / timedelta.total_seconds()
-
-            # update the last reading
-            labels = ["timestamp", "image", "fps", "recording_time"]
-            values = [timestamp, img, fps, lapsed]
-            self._last = dict(zip(labels, values))
-
-            # update the list of collected data
-            if self.is_recording():
-                self._data[timestamp] = img
-
-    def _get_last(self) -> dict:
-        """
-        return the last sampled data.
-        """
-        return self._last
-
     def _QLabel(
         self,
         text: str,
@@ -637,7 +654,7 @@ class LeptonCamera(qtw.QWidget):
         pane.setLayout(layout)
         return pane
 
-    def _update_pointer_temp(
+    def eventFilter(
         self,
         source: qtw.QWidget,
         event: qtc.QEvent,
@@ -645,25 +662,21 @@ class LeptonCamera(qtw.QWidget):
         """
         calculate the temperature-related numbers.
         """
-        if self._get_last() is not None:
+        # check if the pointer is on the image and update pointer temperature
+        if event.type() == qtc.QEvent.MouseMove:
+            x, y = (event.x(), event.y())  # get the mouse coordinates
 
-            # check if the pointer is on the image and update pointer
-            # temperature
-            if event.type() == qtc.QEvent.MouseMove:
-                x, y = (event.x(), event.y())  # get the mouse coordinates
+            # rescale to the original image size
+            w_res = int(x * self.shape[1] / self._camera_label.width())
+            h_res = int(y * self.shape[0] / self._camera_label.height())
 
-                # rescale to the original image size
-                w_res = int(x * self.shape[1] / self._camera_label.width())
-                h_res = int(y * self.shape[0] / self._camera_label.height())
+            # update data_label with the temperature at mouse position
+            temp = self._camera._get_last()["image"][h_res, w_res]
+            self._pointer_label.setText("{:0.1f}".format(temp))
 
-                # update data_label with the temperature at mouse position
-                temp = self._get_last()["image"][h_res, w_res]
-                self._pointer_label.setText("{:0.1f}".format(temp))
-
-            # the pointer leaves the image, therefore no temperature
-            # has to be shown
-            elif event.type() == qtc.QEvent.Leave:
-                self._pointer_label.setText("")
+        # the pointer leaves the image, thus no temperature has to be shown
+        elif event.type() == qtc.QEvent.Leave:
+            self._pointer_label.setText("")
 
         return False
 
@@ -679,20 +692,26 @@ class LeptonCamera(qtw.QWidget):
         msgBox.setStandardButtons(qtw.QMessageBox.Ok)
         msgBox.exec()
 
+    def _close(self) -> None:
+        """
+        terminate the app.
+        """
+        sys.exit()
+
     def _record(self) -> None:
         """
         start and stop the recording of the data.
         """
         if self._rec_button.isChecked():
             self._rec_button.setText("■ STOP RECORDING")
-            self._recording = True
+            self._camera._recording = True
         else:
             self._rec_button.setText("● START RECORDING")
-            self._recording = False
-            if len(self._data) > 0:
+            self._camera._recording = False
+            if len(self._camera._data) > 0:
 
                 # stop the reading
-                self.stop()
+                self._camera.capture_stop()
 
                 # let the user decide where to save the data
                 file_filters = "H5 (*.h5)"
@@ -717,31 +736,26 @@ class LeptonCamera(qtw.QWidget):
                     # save data
                     try:
                         self._save_popup.show()
-                        self.save(path)
-                        self.path = ".".join(path.split(".")[:-1])
+                        self._camera.save(path)
+                        self._camera.path = ".".join(path.split(".")[:-1])
                     except TypeError as err:
                         self._make_message(err)
                     finally:
                         self._save_popup.hide()
 
                 # reset the camera buffer and restart the data streaming
-                self.clear()
-                self.start()
-
-    def _close(self) -> None:
-        """
-        terminate the app.
-        """
-        sys.exit()
+                self._camera.clear()
+                self._camera.capture_start(save=False)
 
     def _update_image(self) -> None:
         """
         display the last captured images.
         """
-        if self._get_last() is not None:
+        obj = self._camera._get_last()
+        if obj is not None:
 
             # get the image
-            img = self._get_last()["image"]
+            img = obj["image"]
 
             # convert to bone scale (flip the values)
             gry = (1 - (img - np.min(img)) / (np.max(img) - np.min(img))) * 255
@@ -793,4 +807,5 @@ class LeptonCamera(qtw.QWidget):
             txt = "Sampling frequency must be in the (0, 8.5] range."
             self._make_message(txt)
             self.set_sampling_frequency(self._sampling_frequency)
-        self.set_sampling_frequency(fs)
+        else:
+            self.set_sampling_frequency(fs)
