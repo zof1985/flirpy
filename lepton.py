@@ -534,7 +534,7 @@ class LeptonCameraWidget(qtw.QWidget):
         try:
             self._timer.stop()
             dt = int(round(1000.0 / self.device.sampling_frequency))
-            self._timer.start(dt)
+            self._timer._start(dt)
         except Exception:
             pass
 
@@ -553,15 +553,31 @@ class LeptonCameraWidget(qtw.QWidget):
         self._sampling_frequency_text.setText(str(self.sampling_frequency))
         self._start()
 
-    def __init__(self, sampling_frequency: float = 5) -> None:
+    def __init__(self) -> None:
         """
         constructor
         """
         super(LeptonCameraWidget, self).__init__()
 
         # set the lepton camera object
-        self._camera = LeptonCamera(sampling_frequency=sampling_frequency)
+        self._camera = LeptonCamera(sampling_frequency=5)
 
+        # get the ui
+        self.setLayout(self._make_ui())
+        self.setWindowTitle("ThermoMetWidget")
+        self.setWindowOpacity(1)
+
+        # stream handlers
+        self._timer = qtc.QTimer()
+        self._timer.timeout.connect(self._update_image)
+
+        # popup dialog
+        self._save_popup = _PopupDialog(self)
+
+    def _make_ui(self):
+        """
+        ui generator.
+        """
         # camera widget
         self._camera_label = qtw.QLabel()
         self._camera_label.setMouseTracking(True)
@@ -580,7 +596,9 @@ class LeptonCameraWidget(qtw.QWidget):
         self._sampling_frequency_text.returnPressed.connect(
             self._update_sampling_frequency
         )
-        self.set_sampling_frequency(sampling_frequency)
+        self.set_sampling_frequency(
+            sampling_frequency=self.device.sampling_frequency,
+        )
 
         # pointer temperature
         self._pointer_label = self._QLabel("")
@@ -606,20 +624,12 @@ class LeptonCameraWidget(qtw.QWidget):
         button_pane.setLayout(button_layout)
 
         # main layout
-        main_layout = qtw.QVBoxLayout()
-        main_layout.addWidget(self._camera_label)
-        main_layout.addWidget(camera_pane)
-        main_layout.addWidget(button_pane)
-        self.setLayout(main_layout)
-        self.setWindowTitle("ThermoMetWidget")
-        self.setWindowOpacity(1)
+        layout = qtw.QVBoxLayout()
+        layout.addWidget(self._camera_label)
+        layout.addWidget(camera_pane)
+        layout.addWidget(button_pane)
 
-        # stream handlers
-        self._timer = qtc.QTimer()
-        self._timer.timeout.connect(self._update_image)
-
-        # popup dialog
-        self._save_popup = _PopupDialog(self)
+        return layout
 
     def show(self):
         """
@@ -692,29 +702,26 @@ class LeptonCameraWidget(qtw.QWidget):
         pane.setLayout(layout)
         return pane
 
-    def eventFilter(
-        self,
-        source: qtw.QWidget,
-        event: qtc.QEvent,
-    ) -> None:
+    def eventFilter(self, source: qtw.QWidget, event: qtc.QEvent) -> None:
         """
         calculate the temperature-related numbers.
         """
         # check if the pointer is on the image and update pointer temperature
-        if event.type() == qtc.QEvent.MouseMove:
-            x, y = (event.x(), event.y())  # get the mouse coordinates
+        if source == self._camera_label:
+            if event.type() == qtc.QEvent.MouseMove:
+                x, y = (event.x(), event.y())  # get the mouse coordinates
 
-            # rescale to the original image size
-            w_res = int(x * self.shape[1] / self._camera_label.width())
-            h_res = int(y * self.shape[0] / self._camera_label.height())
+                # rescale to the original image size
+                w_res = int(x * self.shape[1] / self._camera_label.width())
+                h_res = int(y * self.shape[0] / self._camera_label.height())
 
-            # update data_label with the temperature at mouse position
-            temp = self.device._last[1][h_res, w_res]
-            self._pointer_label.setText("{:0.1f}".format(temp))
+                # update data_label with the temperature at mouse position
+                temp = self.device._last[1][h_res, w_res]
+                self._pointer_label.setText("{:0.1f}".format(temp))
 
-        # the pointer leaves the image, thus no temperature has to be shown
-        elif event.type() == qtc.QEvent.Leave:
-            self._pointer_label.setText("")
+            # the pointer leaves the image, thus no temperature has to be shown
+            elif event.type() == qtc.QEvent.Leave:
+                self._pointer_label.setText("")
 
         return False
 
