@@ -10,3 +10,6 @@ folder = "x64" if platform.architecture()[0] == "64bit" else "x86"
 sys.path.append(os.path.sep.join([os.getcwd(), "flirpy", folder]))
 clr.AddReference("LeptonUVC")
 clr.AddReference("ManagedIR16Filters")
+
+# generic imports
+from .lepton import *
