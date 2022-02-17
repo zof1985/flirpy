@@ -108,6 +108,97 @@ def to_heatmap(img, colorscale=cv2.COLORMAP_JET):
     return cv2.applyColorMap(gry, cv2.COLORMAP_JET)
 
 
+def custom_QLabel(
+    text: str,
+    alignment: str = "center",
+    font_size: int = 10,
+) -> None:
+    """
+    shortcut to QLabel creation with custom settings.
+
+    Parameters
+    ----------
+    text: str
+        the text of the label
+
+    alignement: qtw.QWidget
+        the object effectively visualizing the value.
+
+    unit: str
+        the unit of measurement of the value.
+
+    font_size: int
+        the font size of the labels.
+
+    Returns
+    -------
+    wdg: qtw.QWidget
+        a line with the label, the object and the unit of
+        measurement formatted.
+    """
+    lbl = qtw.QLabel(text)
+    lbl.setFont(qtg.QFont("Arial", font_size))
+    if alignment.lower() == "center":
+        lbl.setAlignment(qtc.Qt.AlignCenter)
+    elif alignment.lower() == "left":
+        lbl.setAlignment(qtc.Qt.AlignLeft)
+    elif alignment.lower() == "right":
+        lbl.setAlignment(qtc.Qt.AlignRight)
+    else:
+        txt = "aligment must be any between left, center, right."
+        raise ValueError(txt)
+    return lbl
+
+
+def custom_data_pane(
+    label: str,
+    widget: qtw.QWidget,
+    unit: str,
+    font_size: int = 10,
+) -> None:
+    """
+    generate a widget allowing the visualization of one value.
+
+    Parameters
+    ----------
+    label: str
+        the name of the value
+
+    widget: qtw.QWidget
+        the object effectively visualizing the value.
+
+    unit: str
+        the unit of measurement of the value.
+
+    font_size: int
+        the font size of the labels.
+
+    Returns
+    -------
+    wdg: qtw.QWidget
+        a line with the label, the object and the unit of
+        measurement formatted.
+    """
+    layout = qtw.QHBoxLayout()
+    title = custom_QLabel(label, "right", font_size)
+    title.setFixedWidth(180)
+    title.setFixedHeight(25)
+    title.setAlignment(qtc.Qt.AlignVCenter)
+    layout.addWidget(title)
+    widget.setFixedWidth(50)
+    widget.setFixedHeight(25)
+    widget.setAlignment(qtc.Qt.AlignVCenter)
+    layout.addWidget(widget)
+    unit = custom_QLabel(unit, "left", font_size)
+    unit.setFixedWidth(50)
+    unit.setFixedHeight(25)
+    unit.setAlignment(qtc.Qt.AlignVCenter)
+    layout.addWidget(unit)
+    pane = qtw.QWidget()
+    pane.setLayout(layout)
+    return pane
+
+
 class LeptonCamera:
     """
     Initialize a Lepton camera object capable of communicating to
@@ -434,13 +525,13 @@ class LeptonCamera:
             raise TypeError(txt)
 
 
-class _PopupDialog(qtw.QDialog):
+class PopupDialog(qtw.QDialog):
     """
     create a popup dialog to display whilst saving files.
     """
 
     def __init__(self, parent):
-        super(_PopupDialog, self).__init__(parent=parent)
+        super(PopupDialog, self).__init__(parent=parent)
 
         # data saving popup
         save_gif = os.path.sep.join(["_contents", "save.gif"])
@@ -474,7 +565,7 @@ class LeptonCameraWidget(qtw.QWidget):
     """
 
     # lepton camera
-    _camera = None
+    _device = None
 
     # class variables
     _image_multiplier = 4
@@ -501,7 +592,7 @@ class LeptonCameraWidget(qtw.QWidget):
         """
         return the actual device.
         """
-        return self._camera
+        return self._device
 
     @property
     def sampling_frequency(self) -> float:
@@ -534,7 +625,7 @@ class LeptonCameraWidget(qtw.QWidget):
         try:
             self._timer.stop()
             dt = int(round(1000.0 / self.device.sampling_frequency))
-            self._timer._start(dt)
+            self._timer.start(dt)
         except Exception:
             pass
 
@@ -553,31 +644,20 @@ class LeptonCameraWidget(qtw.QWidget):
         self._sampling_frequency_text.setText(str(self.sampling_frequency))
         self._start()
 
-    def __init__(self) -> None:
+    def __init__(self, device: LeptonCamera = None, parent=None) -> None:
         """
         constructor
         """
-        super(LeptonCameraWidget, self).__init__()
+        super(LeptonCameraWidget, self).__init__(parent=parent)
 
         # set the lepton camera object
-        self._camera = LeptonCamera(sampling_frequency=5)
+        if device is None:
+            self._device = LeptonCamera(sampling_frequency=5)
+        else:
+            txt = "device must be a LeptonCamera instance."
+            assert isinstance(device, LeptonCamera), txt
+            self._device = device
 
-        # get the ui
-        self.setLayout(self._make_ui())
-        self.setWindowTitle("ThermoMetWidget")
-        self.setWindowOpacity(1)
-
-        # stream handlers
-        self._timer = qtc.QTimer()
-        self._timer.timeout.connect(self._update_image)
-
-        # popup dialog
-        self._save_popup = _PopupDialog(self)
-
-    def _make_ui(self):
-        """
-        ui generator.
-        """
         # camera widget
         self._camera_label = qtw.QLabel()
         self._camera_label.setMouseTracking(True)
@@ -588,7 +668,7 @@ class LeptonCameraWidget(qtw.QWidget):
         lbl_font = qtg.QFont("Arial", self._font_size)
         self._sampling_frequency_text.setFont(lbl_font)
         self._sampling_frequency_text.setAlignment(qtc.Qt.AlignCenter)
-        sampling_frequency_pane = self._data_pane(
+        sampling_frequency_pane = custom_data_pane(
             label="SAMPLING FREQUENCY",
             widget=self._sampling_frequency_text,
             unit="Hz",
@@ -601,8 +681,13 @@ class LeptonCameraWidget(qtw.QWidget):
         )
 
         # pointer temperature
-        self._pointer_label = self._QLabel("")
-        pointer_pane = self._data_pane("POINTER", self._pointer_label, "°C")
+        self._pointer_label = custom_QLabel("", font_size=self._font_size)
+        pointer_pane = custom_data_pane(
+            "POINTER",
+            self._pointer_label,
+            "°C",
+            font_size=self._font_size,
+        )
 
         # camera pane
         data_layout = qtw.QHBoxLayout()
@@ -628,8 +713,16 @@ class LeptonCameraWidget(qtw.QWidget):
         layout.addWidget(self._camera_label)
         layout.addWidget(camera_pane)
         layout.addWidget(button_pane)
+        self.setLayout(layout)
+        self.setWindowTitle("LeptonCameraWidget")
+        self.setWindowOpacity(1)
 
-        return layout
+        # stream handlers
+        self._timer = qtc.QTimer()
+        self._timer.timeout.connect(self._update)
+
+        # popup dialog
+        self._save_popup = PopupDialog(self)
 
     def show(self):
         """
@@ -639,69 +732,6 @@ class LeptonCameraWidget(qtw.QWidget):
         self._start()
         super(LeptonCameraWidget, self).show()
 
-    def _QLabel(
-        self,
-        text: str,
-        alignment: str = "center",
-    ) -> None:
-        """
-        shortcut to QLabel creation with custom settings
-        """
-        lbl = qtw.QLabel(text)
-        lbl.setFont(qtg.QFont("Arial", self._font_size))
-        if alignment.lower() == "center":
-            lbl.setAlignment(qtc.Qt.AlignCenter)
-        elif alignment.lower() == "left":
-            lbl.setAlignment(qtc.Qt.AlignLeft)
-        elif alignment.lower() == "right":
-            lbl.setAlignment(qtc.Qt.AlignRight)
-        else:
-            txt = "aligment must be any between left, center, right."
-            raise ValueError(txt)
-        return lbl
-
-    def _data_pane(
-        self,
-        label: str,
-        widget: qtw.QWidget,
-        unit: str,
-    ) -> None:
-        """
-        generate a widget allowing the visualization of one value.
-
-        Parameters
-        ----------
-        label: str
-            the name of the value
-
-        widget: qtw.QWidget
-            the object effectively visualizing the value.
-
-        unit: str
-            the unit of measurement of the value.
-
-        Returns
-        -------
-        wdg: qtw.QWidget
-            a line with the label, the object and the unit of
-            measurement formatted.
-        """
-        layout = qtw.QHBoxLayout()
-        title = self._QLabel(label, "right")
-        title.setFixedWidth(180)
-        title.setFixedHeight(25)
-        layout.addWidget(title)
-        widget.setFixedWidth(50)
-        widget.setFixedHeight(25)
-        layout.addWidget(widget)
-        unit = self._QLabel(unit, "left")
-        unit.setFixedWidth(50)
-        unit.setFixedHeight(25)
-        layout.addWidget(unit)
-        pane = qtw.QWidget()
-        pane.setLayout(layout)
-        return pane
-
     def eventFilter(self, source: qtw.QWidget, event: qtc.QEvent) -> None:
         """
         calculate the temperature-related numbers.
@@ -709,15 +739,16 @@ class LeptonCameraWidget(qtw.QWidget):
         # check if the pointer is on the image and update pointer temperature
         if source == self._camera_label:
             if event.type() == qtc.QEvent.MouseMove:
-                x, y = (event.x(), event.y())  # get the mouse coordinates
+                if self.device._last is not None:
+                    x, y = (event.x(), event.y())  # get the mouse coordinates
 
-                # rescale to the original image size
-                w_res = int(x * self.shape[1] / self._camera_label.width())
-                h_res = int(y * self.shape[0] / self._camera_label.height())
+                    # rescale to the original image size
+                    w_res = int(x * self.shape[1] / self._camera_label.width())
+                    h_res = int(y * self.shape[0] / self._camera_label.height())
 
-                # update data_label with the temperature at mouse position
-                temp = self.device._last[1][h_res, w_res]
-                self._pointer_label.setText("{:0.1f}".format(temp))
+                    # update data_label with the temperature at mouse position
+                    temp = self.device._last[1][h_res, w_res]
+                    self._pointer_label.setText("{:0.1f}".format(temp))
 
             # the pointer leaves the image, thus no temperature has to be shown
             elif event.type() == qtc.QEvent.Leave:
@@ -754,7 +785,7 @@ class LeptonCameraWidget(qtw.QWidget):
         else:
             self.device.interrupt()
             self._rec_button.setText("● START RECORDING")
-            if len(self._camera._data) > 0:
+            if len(self._device._data) > 0:
 
                 # let the user decide where to save the data
                 file_filters = "H5 (*.h5)"
@@ -790,7 +821,7 @@ class LeptonCameraWidget(qtw.QWidget):
                 self.device.clear()
                 self.device.capture(save=False)
 
-    def _update_image(self) -> None:
+    def _update(self) -> None:
         """
         display the last captured images.
         """

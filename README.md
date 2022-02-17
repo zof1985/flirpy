@@ -74,20 +74,23 @@ plt.show()
 ### Example 2 - GUI with recording and visualization options
 
 ```
+# imports
 from flirpy import *
 import PySide2.QtWidgets as qtw
 import PySide2.QtCore as qtc
 import sys
 
-# highdpi scaling
-qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, True)
-qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, True)
+if __name__ == "__main__":
 
-# app generation
-app = qtw.QApplication(sys.argv)
-camera = LeptonCameraWidget(sampling_frequency=5)
-camera.show()
-sys.exit(app.exec_())
+    # highdpi scaling
+    qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, True)
+    qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, True)
+
+    # app generation
+    app = qtw.QApplication(sys.argv)
+    camera = LeptonCameraWidget()
+    camera.show()
+    sys.exit(app.exec_())
 ```
 
 ---
