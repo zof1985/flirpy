@@ -181,16 +181,16 @@ def custom_data_pane(
     """
     layout = qtw.QHBoxLayout()
     title = custom_QLabel(label, "right", font_size)
-    title.setFixedWidth(180)
+    # title.setFixedWidth(180)
     title.setFixedHeight(25)
     title.setAlignment(qtc.Qt.AlignVCenter)
     layout.addWidget(title)
-    widget.setFixedWidth(50)
+    # widget.setFixedWidth(50)
     widget.setFixedHeight(25)
     widget.setAlignment(qtc.Qt.AlignVCenter)
     layout.addWidget(widget)
     unit = custom_QLabel(unit, "left", font_size)
-    unit.setFixedWidth(50)
+    # unit.setFixedWidth(50)
     unit.setFixedHeight(25)
     unit.setAlignment(qtc.Qt.AlignVCenter)
     layout.addWidget(unit)
@@ -568,7 +568,7 @@ class LeptonCameraWidget(qtw.QWidget):
     _device = None
 
     # class variables
-    _image_multiplier = 4
+    _image_multiplier = 3
     _font_size = 10
     _path = ""
 
@@ -689,13 +689,6 @@ class LeptonCameraWidget(qtw.QWidget):
             font_size=self._font_size,
         )
 
-        # camera pane
-        data_layout = qtw.QHBoxLayout()
-        data_layout.addWidget(sampling_frequency_pane)
-        data_layout.addWidget(pointer_pane)
-        camera_pane = qtw.QWidget()
-        camera_pane.setLayout(data_layout)
-
         # button bar with both recording and exit button
         self._quit_button = qtw.QPushButton("QUIT")
         self._quit_button.clicked.connect(self._close)
@@ -711,7 +704,8 @@ class LeptonCameraWidget(qtw.QWidget):
         # main layout
         layout = qtw.QVBoxLayout()
         layout.addWidget(self._camera_label)
-        layout.addWidget(camera_pane)
+        layout.addWidget(sampling_frequency_pane)
+        layout.addWidget(pointer_pane)
         layout.addWidget(button_pane)
         self.setLayout(layout)
         self.setWindowTitle("LeptonCameraWidget")
@@ -871,7 +865,7 @@ class LeptonCameraWidget(qtw.QWidget):
             cv2.putText(
                 img_resized,
                 "FPS: {:0.2f}".format(fps),
-                (int(width * 0.7), int(height * 0.05)),
+                (int(width * 0.6), int(height * 0.1)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
                 (255, 255, 255),
