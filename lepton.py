@@ -6,6 +6,7 @@ from IR16Filters import IR16Capture, NewBytesFrameEvent
 # python useful packages
 from datetime import datetime
 from typing import Tuple
+from scipy import ndimage
 import PySide2.QtWidgets as qtw
 import PySide2.QtCore as qtc
 import PySide2.QtGui as qtg
@@ -80,7 +81,7 @@ def read_file(filename: str) -> None:
     return dict(zip(timestamps, samples))
 
 
-def to_heatmap(img, colorscale=cv2.COLORMAP_JET):
+def to_heatmap(img, colormap=cv2.COLORMAP_JET):
     """
     convert a sampled frame to a opencv colorscaled map.
 
@@ -89,7 +90,7 @@ def to_heatmap(img, colorscale=cv2.COLORMAP_JET):
     img: 2D numpy.ndarray
         the matrix containing the temperatures collected on one sample.
 
-    colorscale: OpenCV colormap
+    colormap: OpenCV colormap
         the colormap to be used.
 
     Returns
@@ -102,101 +103,10 @@ def to_heatmap(img, colorscale=cv2.COLORMAP_JET):
     gry = (1 - (img - np.min(img)) / (np.max(img) - np.min(img))) * 255
     gry = np.expand_dims(gry, 2).astype(np.uint8)
     gry = cv2.merge([gry, gry, gry])
-    gry = cv2.applyColorMap(gry, cv2.COLORMAP_BONE)
+    # gry = cv2.applyColorMap(gry, cv2.COLORMAP_BONE)
 
     # converto to heatmap
-    return cv2.applyColorMap(gry, cv2.COLORMAP_JET)
-
-
-def custom_QLabel(
-    text: str,
-    alignment: str = "center",
-    font_size: int = 10,
-) -> None:
-    """
-    shortcut to QLabel creation with custom settings.
-
-    Parameters
-    ----------
-    text: str
-        the text of the label
-
-    alignement: qtw.QWidget
-        the object effectively visualizing the value.
-
-    unit: str
-        the unit of measurement of the value.
-
-    font_size: int
-        the font size of the labels.
-
-    Returns
-    -------
-    wdg: qtw.QWidget
-        a line with the label, the object and the unit of
-        measurement formatted.
-    """
-    lbl = qtw.QLabel(text)
-    lbl.setFont(qtg.QFont("Arial", font_size))
-    if alignment.lower() == "center":
-        lbl.setAlignment(qtc.Qt.AlignCenter)
-    elif alignment.lower() == "left":
-        lbl.setAlignment(qtc.Qt.AlignLeft)
-    elif alignment.lower() == "right":
-        lbl.setAlignment(qtc.Qt.AlignRight)
-    else:
-        txt = "aligment must be any between left, center, right."
-        raise ValueError(txt)
-    return lbl
-
-
-def custom_data_pane(
-    label: str,
-    widget: qtw.QWidget,
-    unit: str,
-    font_size: int = 10,
-) -> None:
-    """
-    generate a widget allowing the visualization of one value.
-
-    Parameters
-    ----------
-    label: str
-        the name of the value
-
-    widget: qtw.QWidget
-        the object effectively visualizing the value.
-
-    unit: str
-        the unit of measurement of the value.
-
-    font_size: int
-        the font size of the labels.
-
-    Returns
-    -------
-    wdg: qtw.QWidget
-        a line with the label, the object and the unit of
-        measurement formatted.
-    """
-    layout = qtw.QHBoxLayout()
-    title = custom_QLabel(label, "right", font_size)
-    # title.setFixedWidth(180)
-    title.setFixedHeight(25)
-    title.setAlignment(qtc.Qt.AlignVCenter)
-    layout.addWidget(title)
-    # widget.setFixedWidth(50)
-    widget.setFixedHeight(25)
-    widget.setAlignment(qtc.Qt.AlignVCenter)
-    layout.addWidget(widget)
-    unit = custom_QLabel(unit, "left", font_size)
-    # unit.setFixedWidth(50)
-    unit.setFixedHeight(25)
-    unit.setAlignment(qtc.Qt.AlignVCenter)
-    layout.addWidget(unit)
-    pane = qtw.QWidget()
-    pane.setLayout(layout)
-    return pane
+    return cv2.applyColorMap(gry, colormap)
 
 
 class LeptonCamera:
@@ -525,33 +435,6 @@ class LeptonCamera:
             raise TypeError(txt)
 
 
-class PopupDialog(qtw.QDialog):
-    """
-    create a popup dialog to display whilst saving files.
-    """
-
-    def __init__(self, parent):
-        super(PopupDialog, self).__init__(parent=parent)
-
-        # data saving popup
-        save_gif = os.path.sep.join(["_contents", "save.gif"])
-        movie = qtg.QMovie(save_gif)
-        animation = qtw.QLabel()
-        animation.setFixedSize(256, 256)
-        animation.setMovie(movie)
-        movie.start()
-        message = qtw.QLabel("SAVING COLLECTED DATA")
-        message.setAlignment(qtc.Qt.AlignCenter)
-        message.setFont(qtg.QFont("Arial", LeptonCameraWidget.font_size()))
-        diag_layout = qtw.QVBoxLayout()
-        diag_layout.addWidget(animation)
-        diag_layout.addWidget(message)
-        self.setModal(True)
-        self.setLayout(diag_layout)
-        self.setWindowTitle("Please wait.")
-        self.hide()
-
-
 class LeptonCameraWidget(qtw.QWidget):
     """
     Initialize a PySide2 widget capable of communicating to
@@ -561,94 +444,278 @@ class LeptonCameraWidget(qtw.QWidget):
     ----------
     sampling_frequency: float, int
         the sampling frequency in Hz for the camera readings.
-        It must be <= 8.5 Hz.
+        It must be <= 8.7 Hz.
     """
 
-    # lepton camera
+    # available colormaps
+    _colormaps = {
+        "AUTUMN": cv2.COLORMAP_AUTUMN,
+        "BONE": cv2.COLORMAP_BONE,
+        "JET": cv2.COLORMAP_JET,
+        "WINTER": cv2.COLORMAP_WINTER,
+        "RAINBOW": cv2.COLORMAP_RAINBOW,
+        "OCEAN": cv2.COLORMAP_OCEAN,
+        "SUMMER": cv2.COLORMAP_SUMMER,
+        "SPRING": cv2.COLORMAP_SPRING,
+        "COOL": cv2.COLORMAP_COOL,
+        "HSV": cv2.COLORMAP_HSV,
+        "PINK": cv2.COLORMAP_PINK,
+        "HOT": cv2.COLORMAP_HOT,
+        "PARULA": cv2.COLORMAP_PARULA,
+        "MAGMA": cv2.COLORMAP_MAGMA,
+        "INFERNO": cv2.COLORMAP_INFERNO,
+        "PLASMA": cv2.COLORMAP_PLASMA,
+        "VIRIDIS": cv2.COLORMAP_VIRIDIS,
+        "CIVIDIS": cv2.COLORMAP_CIVIDIS,
+        "TWILIGHT": cv2.COLORMAP_TWILIGHT,
+        "TWILIGHT_SHIFTED": cv2.COLORMAP_TWILIGHT_SHIFTED,
+        "TURBO": cv2.COLORMAP_TURBO,
+        "DEEPGREEN": cv2.COLORMAP_DEEPGREEN,
+    }
+
+    # private variables
+    _font_size = 10
+    _size = 35
+    _path = ""
+    _angle = 0
+    _zoom = 1
+    _timer = None
+    _dt = None
+    _view = None
+    _colormap = list(_colormaps.values())[0]
     _device = None
 
-    # class variables
-    _image_multiplier = 3
-    _font_size = 10
-    _path = ""
-
-    # qt timer
-    _timer = None
-    _last_dt = None
-
     # widgets
-    _sampling_frequency_text = None
-    _camera_label = None
-    _fps_label = None
-    _pointer_label = None
-    _quit_button = None
-    _rec_button = None
+    frequencyBox = None
+    zoomBox = None
+    cameraLabel = None
+    rotationButton = None
+    colorBox = None
+    quitButton = None
+    recButton = None
+    optionsPane = None
+    savePopup = None
+    pointerLabel = None
+    fpsLabel = None
+    recordLabel = None
 
-    # dialogs
-    _save_popup = None
-
-    @property
-    def device(self):
+    def getDevice(self):
         """
         return the actual device.
         """
         return self._device
 
-    @property
-    def sampling_frequency(self) -> float:
-        """
-        return the actual sampling frequency
-        """
-        return self.device.sampling_frequency
-
-    @property
-    def shape(self) -> Tuple[int, int]:
-        """
-        return the shape of the collected images.
-        """
-        return self.device.shape
-
-    @classmethod
-    def font_size(cls):
-        return cls._font_size
-
-    def is_recording(self):
-        """
-        check if the camera is recording data.
-        """
-        return self.device.is_recording()
-
-    def _start(self):
+    def start(self):
         """
         start the timer.
         """
         try:
             self._timer.stop()
-            dt = int(round(1000.0 / self.device.sampling_frequency))
-            self._timer.start(dt)
+            self._timer.start(int(round(1000.0 / self.getFrequency())))
         except Exception:
             pass
 
-    def set_sampling_frequency(self, sampling_frequency: float) -> None:
+    def show(self):
         """
-        set the sampling frequency value and update the _dt argument.
-
-        Parameters
-        ----------
-        sampling_frequency: float, int
-            the new sampling frequency
+        make the widget visible.
         """
+        self.getDevice().capture(save=False)
+        self.start()
+        super(LeptonCameraWidget, self).show()
 
-        # check the input
-        self.device.set_sampling_frequency(sampling_frequency)
-        self._sampling_frequency_text.setText(str(self.sampling_frequency))
-        self._start()
+    def close(self) -> None:
+        """
+        terminate the app.
+        """
+        sys.exit()
+
+    def isRecording(self):
+        """
+        check if the camera is recording data.
+        """
+        return self.getDevice().is_recording()
+
+    def getFrequency(self) -> float:
+        """
+        return the actual sampling frequency
+        """
+        return self.getDevice().sampling_frequency
+
+    def setFrequency(self) -> None:
+        """
+        set the sampling frequency.
+        """
+        # update the timer time
+        self._timer.stop()
+        freq = self.frequencyBox.value()
+        self.getDevice().set_sampling_frequency(freq)
+        self._timer.start(int(round(1000.0 / freq)))
+
+    def setAngle(self) -> None:
+        """
+        set the rotation angle.
+        """
+        self._angle += 90
+
+    def setZoom(self) -> None:
+        """
+        set the actual zoom.
+        """
+        self._zoom = self.zoomBox.value()
+
+    def setColor(self, text) -> None:
+        """
+        set the actual colormap
+        """
+        self._colormap = self._colormaps[text]
+
+    def getFrame(self):
+        """
+        return the last frame view.
+        It returns None if no value has been sampled.
+        """
+        return self._dt, self._view
 
     def __init__(self, device: LeptonCamera = None, parent=None) -> None:
         """
         constructor
         """
         super(LeptonCameraWidget, self).__init__(parent=parent)
+        self.font = qtg.QFont("Arial", self._font_size)
+        self._path = os.path.sep.join(__file__.split(os.path.sep)[:-1])
+
+        # sampling frequency
+        self.frequencyBox = qtw.QDoubleSpinBox()
+        self.frequencyBox.setFont(self.font)
+        self.frequencyBox.setDecimals(1)
+        self.frequencyBox.setMinimum(1.0)
+        self.frequencyBox.setSingleStep(0.1)
+        self.frequencyBox.setMaximum(8.7)
+        self.frequencyBox.setValue(5.0)
+        self.frequencyBox.setValue(5.0)
+        self.frequencyBox.valueChanged.connect(self.setFrequency)
+        frequencyLayout = qtw.QHBoxLayout()
+        frequencyLayout.setContentsMargins(2, 0, 2, 2)
+        frequencyLayout.addWidget(self.frequencyBox)
+        frequencyPane = qtw.QGroupBox("Sampling frequency (Hz)")
+        frequencyPane.setLayout(frequencyLayout)
+
+        # zoom
+        self.zoomBox = qtw.QDoubleSpinBox()
+        self.zoomBox.setFont(self.font)
+        self.zoomBox.setDecimals(1)
+        self.zoomBox.setMinimum(1)
+        self.zoomBox.setMaximum(5)
+        self.zoomBox.setSingleStep(0.1)
+        self.zoomBox.setValue(3)
+        self.zoomBox.valueChanged.connect(self.setZoom)
+        zoomLayout = qtw.QHBoxLayout()
+        zoomLayout.setContentsMargins(2, 0, 2, 2)
+        zoomLayout.addWidget(self.zoomBox)
+        zoomPane = qtw.QGroupBox("Zoom (X times)")
+        zoomPane.setLayout(zoomLayout)
+
+        # colormaps
+        self.colorBox = qtw.QComboBox()
+        self.colorBox.addItems(list(self._colormaps.keys()))
+        self.colorBox.setFont(self.font)
+        self.colorBox.currentTextChanged.connect(self.setColor)
+        colorLayout = qtw.QHBoxLayout()
+        colorLayout.setContentsMargins(2, 0, 2, 2)
+        colorLayout.addWidget(self.colorBox)
+        colorPane = qtw.QGroupBox("Colormap")
+        colorPane.setLayout(colorLayout)
+
+        # options pane
+        optLine = qtw.QWidget()
+        optLayout = qtw.QHBoxLayout()
+        optLayout.addWidget(frequencyPane)
+        optLayout.addWidget(zoomPane)
+        optLayout.setSpacing(10)
+        optLayout.setContentsMargins(2, 2, 2, 0)
+        optLine.setLayout(optLayout)
+        optionsLayout = qtw.QVBoxLayout()
+        optionsLayout.addWidget(optLine)
+        optionsLayout.addWidget(colorPane)
+        optionsLayout.setSpacing(10)
+        optionsLayout.setContentsMargins(2, 2, 2, 2)
+        self.optionsPane = qtw.QWidget()
+        self.optionsPane.setLayout(optionsLayout)
+
+        # pointer label
+        self.pointerLabel = qtw.QLabel("")
+        self.pointerLabel.setFont(self.font)
+        self.pointerLabel.setAlignment(qtc.Qt.AlignCenter | qtc.Qt.AlignVCenter)
+        pointerLayout = qtw.QHBoxLayout()
+        pointerLayout.setContentsMargins(2, 0, 2, 2)
+        pointerLayout.addWidget(self.pointerLabel)
+        pointerPane = qtw.QGroupBox("Pointer temp. (°C)")
+        pointerPane.setLayout(pointerLayout)
+
+        # fps label
+        self.fpsLabel = qtw.QLabel("")
+        self.fpsLabel.setFont(self.font)
+        self.fpsLabel.setAlignment(qtc.Qt.AlignCenter | qtc.Qt.AlignVCenter)
+        fpsLayout = qtw.QHBoxLayout()
+        fpsLayout.setContentsMargins(2, 0, 2, 2)
+        fpsLayout.addWidget(self.fpsLabel)
+        fpsPane = qtw.QGroupBox("FPS")
+        fpsPane.setLayout(fpsLayout)
+
+        # camera rotation
+        self.rotationButton = qtw.QPushButton()
+        icon = os.path.sep.join([self._path, "_contents", "rotation.png"])
+        icon = qtg.QIcon(qtg.QPixmap(icon).scaled(self._size, self._size))
+        self.rotationButton.setIcon(icon)
+        self.rotationButton.setFlat(True)
+        self.rotationButton.setFixedHeight(self._size)
+        self.rotationButton.setFixedWidth(self._size)
+        self.rotationButton.clicked.connect(self.setAngle)
+        rotationLayout = qtw.QHBoxLayout()
+        rotationLayout.setContentsMargins(2, 0, 2, 2)
+        rotationLayout.addWidget(self.rotationButton)
+        rotationPane = qtw.QGroupBox("Rotate 90°")
+        rotationPane.setLayout(rotationLayout)
+
+        # data pane
+        dataLayout = qtw.QHBoxLayout()
+        dataLayout.setContentsMargins(0, 0, 0, 0)
+        dataLayout.setSpacing(10)
+        dataLayout.addWidget(pointerPane)
+        dataLayout.addWidget(fpsPane)
+        dataLayout.addWidget(rotationPane)
+        dataPane = qtw.QWidget()
+        dataPane.setLayout(dataLayout)
+
+        # record pane
+        self.recordLabel = qtw.QLabel("")
+        self.recordLabel.setFont(self.font)
+        self.recordLabel.setAlignment(qtc.Qt.AlignCenter | qtc.Qt.AlignVCenter)
+        recordLayout = qtw.QHBoxLayout()
+        recordLayout.setContentsMargins(2, 0, 2, 2)
+        recordLayout.addWidget(self.recordLabel)
+        recordPane = qtw.QGroupBox("Recording time")
+        recordPane.setLayout(recordLayout)
+
+        # quit button
+        self.quitButton = qtw.QPushButton("QUIT")
+        self.quitButton.setFixedHeight(self._size)
+        self.quitButton.clicked.connect(self.close)
+
+        # rec button
+        self.recButton = qtw.QPushButton("● START RECORDING")
+        self.recButton.setFixedHeight(self._size)
+        self.recButton.clicked.connect(self.record)
+        self.recButton.setCheckable(True)
+
+        # buttons pane
+        buttonLayout = qtw.QHBoxLayout()
+        buttonLayout.addWidget(self.recButton)
+        buttonLayout.addWidget(self.quitButton)
+        buttonLayout.setSpacing(10)
+        buttonLayout.setContentsMargins(2, 2, 2, 2)
+        buttonPane = qtw.QWidget()
+        buttonPane.setLayout(buttonLayout)
 
         # set the lepton camera object
         if device is None:
@@ -659,126 +726,100 @@ class LeptonCameraWidget(qtw.QWidget):
             self._device = device
 
         # camera widget
-        self._camera_label = qtw.QLabel()
-        self._camera_label.setMouseTracking(True)
-        self._camera_label.installEventFilter(self)
-
-        # sampling frequency pane
-        self._sampling_frequency_text = qtw.QLineEdit("")
-        lbl_font = qtg.QFont("Arial", self._font_size)
-        self._sampling_frequency_text.setFont(lbl_font)
-        self._sampling_frequency_text.setAlignment(qtc.Qt.AlignCenter)
-        sampling_frequency_pane = custom_data_pane(
-            label="SAMPLING FREQUENCY",
-            widget=self._sampling_frequency_text,
-            unit="Hz",
-        )
-        self._sampling_frequency_text.returnPressed.connect(
-            self._update_sampling_frequency
-        )
-        self.set_sampling_frequency(
-            sampling_frequency=self.device.sampling_frequency,
-        )
-
-        # pointer temperature
-        self._pointer_label = custom_QLabel("", font_size=self._font_size)
-        pointer_pane = custom_data_pane(
-            "POINTER",
-            self._pointer_label,
-            "°C",
-            font_size=self._font_size,
-        )
-
-        # button bar with both recording and exit button
-        self._quit_button = qtw.QPushButton("QUIT")
-        self._quit_button.clicked.connect(self._close)
-        self._rec_button = qtw.QPushButton("● START RECORDING", self)
-        self._rec_button.clicked.connect(self._record)
-        self._rec_button.setCheckable(True)
-        button_layout = qtw.QHBoxLayout()
-        button_layout.addWidget(self._rec_button)
-        button_layout.addWidget(self._quit_button)
-        button_pane = qtw.QWidget()
-        button_pane.setLayout(button_layout)
+        self.cameraLabel = qtw.QLabel()
+        self.cameraLabel.setMouseTracking(True)
+        self.cameraLabel.installEventFilter(self)
 
         # main layout
-        layout = qtw.QVBoxLayout()
-        layout.addWidget(self._camera_label)
-        layout.addWidget(sampling_frequency_pane)
-        layout.addWidget(pointer_pane)
-        layout.addWidget(button_pane)
+        layoutLeft = qtw.QVBoxLayout()
+        layoutLeft.addWidget(self.cameraLabel)
+        layoutLeft.addWidget(dataPane)
+        layoutLeft.addWidget(recordPane)
+        layoutLeft.addWidget(buttonPane)
+        layoutLeft.setSpacing(10)
+        layoutLeft.setContentsMargins(0, 0, 0, 0)
+        leftPane = qtw.QWidget()
+        leftPane.setLayout(layoutLeft)
+        layout = qtw.QHBoxLayout()
+        layout.addWidget(leftPane)
+        layout.addWidget(self.optionsPane)
+        layout.setSpacing(10)
+        layout.setContentsMargins(2, 2, 2, 2)
         self.setLayout(layout)
+        icon = os.path.sep.join([self._path, "_contents", "main.png"])
+        icon = qtg.QIcon(qtg.QPixmap(icon).scaled(self._size, self._size))
+        self.setWindowIcon(icon)
         self.setWindowTitle("LeptonCameraWidget")
-        self.setWindowOpacity(1)
+
+        # data saving popup
+        save_gif = os.path.sep.join([self._path, "_contents", "save.gif"])
+        movie = qtg.QMovie(save_gif)
+        animation = qtw.QLabel()
+        animation.setFixedSize(256, 256)
+        animation.setMovie(movie)
+        movie.start()
+        message = qtw.QLabel("SAVING COLLECTED DATA")
+        message.setAlignment(qtc.Qt.AlignCenter)
+        message.setFont(self.font)
+        diagLayout = qtw.QVBoxLayout()
+        diagLayout.addWidget(animation)
+        diagLayout.addWidget(message)
+        popup = qtw.QDialog()
+        popup.setWindowFlags(qtc.Qt.FramelessWindowHint)
+        popup.setModal(True)
+        popup.setLayout(diagLayout)
+        popup.setWindowTitle("Saving data")
+        popup.show()
+        popup.hide()
+        self.savePopup = popup
 
         # stream handlers
         self._timer = qtc.QTimer()
-        self._timer.timeout.connect(self._update)
+        self._timer.timeout.connect(self.updateView)
 
-        # popup dialog
-        self._save_popup = PopupDialog(self)
+        # setup the pointer temperature
+        self._pointer_temp = "°C"
 
-    def show(self):
-        """
-        make the widget visible.
-        """
-        self.device.capture(save=False)
-        self._start()
-        super(LeptonCameraWidget, self).show()
+        # initialize the parameters
+        self.setFrequency()
+        self.setZoom()
+        self.setColor(list(self._colormaps.keys())[0])
 
     def eventFilter(self, source: qtw.QWidget, event: qtc.QEvent) -> None:
         """
         calculate the temperature-related numbers.
         """
-        # check if the pointer is on the image and update pointer temperature
-        if source == self._camera_label:
+        # check if the pointer is on the image
+        # and update pointer temperature
+        if source == self.cameraLabel:
             if event.type() == qtc.QEvent.MouseMove:
-                if self.device._last is not None:
-                    x, y = (event.x(), event.y())  # get the mouse coordinates
+                if self.getDevice()._last is not None:
+                    view = self.getFrame()[1]
+                    try:
+                        temp = view[event.y(), event.x()]
+                        self.pointerLabel.setText("{:0.1f}".format(temp))
+                    except Exception:
+                        self.pointerLabel.setText("")
 
-                    # rescale to the original image size
-                    w_res = int(x * self.shape[1] / self._camera_label.width())
-                    h_res = int(y * self.shape[0] / self._camera_label.height())
-
-                    # update data_label with the temperature at mouse position
-                    temp = self.device._last[1][h_res, w_res]
-                    self._pointer_label.setText("{:0.1f}".format(temp))
-
-            # the pointer leaves the image, thus no temperature has to be shown
+            # the pointer leaves the image,
+            # thus no temperature has to be shown
             elif event.type() == qtc.QEvent.Leave:
-                self._pointer_label.setText("")
+                self.pointerLabel.setText("")
 
         return False
 
-    def _make_message(self, txt):
-        """
-        make an alert message with a given text.
-        """
-        msgBox = qtw.QMessageBox()
-        msgBox.setIcon(qtw.QMessageBox.Warning)
-        msgBox.setText(txt)
-        msgBox.setFont(qtg.QFont("Arial", self._font_size))
-        msgBox.setWindowTitle("ERROR")
-        msgBox.setStandardButtons(qtw.QMessageBox.Ok)
-        msgBox.exec()
-
-    def _close(self) -> None:
-        """
-        terminate the app.
-        """
-        sys.exit()
-
-    def _record(self) -> None:
+    def record(self) -> None:
         """
         start and stop the recording of the data.
         """
-        if self._rec_button.isChecked():
-            self.device.interrupt()
-            self.device.capture(save=True)
-            self._rec_button.setText("■ STOP RECORDING")
+        if self.recButton.isChecked():
+            self.getDevice().interrupt()
+            self.getDevice().capture(save=True)
+            self.recButton.setText("■ STOP RECORDING")
+
         else:
-            self.device.interrupt()
-            self._rec_button.setText("● START RECORDING")
+            self.getDevice().interrupt()
+            self.recButton.setText("● START RECORDING")
             if len(self._device._data) > 0:
 
                 # let the user decide where to save the data
@@ -803,42 +844,56 @@ class LeptonCameraWidget(qtw.QWidget):
 
                     # save data
                     try:
-                        self._save_popup.show()
-                        self.device.save(path)
+                        self.savePopup.show()
+                        self.getDevice().save(path)
                         self._path = ".".join(path.split(".")[:-1])
+
                     except TypeError as err:
-                        self._make_message(err)
+                        msgBox = qtw.QMessageBox()
+                        msgBox.setIcon(qtw.QMessageBox.Warning)
+                        msgBox.setText(err)
+                        msgBox.setFont(qtg.QFont("Arial", self._font_size))
+                        msgBox.setWindowTitle("ERROR")
+                        msgBox.setStandardButtons(qtw.QMessageBox.Ok)
+                        msgBox.exec()
+
                     finally:
-                        self._save_popup.hide()
+                        self.savePopup.hide()
 
                 # reset the camera buffer and restart the data streaming
-                self.device.clear()
-                self.device.capture(save=False)
+                self.getDevice().clear()
+                self.getDevice().capture(save=False)
 
-    def _update(self) -> None:
+    def updateView(self) -> None:
         """
-        display the last captured images.
+        update the last frame and display it.
         """
-        if self.device._last is not None:
+        # no view is available
+        if self.getDevice()._last is None:
+            self._view = None
+            self._dt = None
 
-            # get the time and image
-            dt, img = self.device._last
+        else:
+            dt, img = self.getDevice()._last
 
-            # update the last dt if none
-            if self._last_dt is None:
-                self._last_dt = dt
+            # update the last datetime if required
+            if self._dt is None:
+                self._dt = dt
 
-            # convert the image to an heatmap
-            heatmap = to_heatmap(img, cv2.COLORMAP_JET)
-
-            # resize preserving the aspect ratio
-            height = int(self._image_multiplier * img.shape[0])
-            width = int(self._image_multiplier * img.shape[1])
-            img_resized = cv2.resize(heatmap, (width, height))
+            # convert the last frame to an heatmap and apply the required
+            # rotation and zoom
+            img = img.astype(float)
+            img = ndimage.zoom(
+                input=ndimage.rotate(input=img, angle=self._angle),
+                zoom=self._zoom,
+            )
+            h, w = img.shape
+            self._view = img
+            heat = to_heatmap(img, self._colormap)
 
             # set the recording overlay if required
-            if self.is_recording():
-                tt = dt - list(self.device._data.keys())[0]
+            if self.isRecording():
+                tt = dt - list(self.getDevice()._data.keys())[0]
                 tt = tt.total_seconds()
                 h, remainder = divmod(tt, 3600)
                 m, remainder = divmod(remainder, 60)
@@ -848,50 +903,21 @@ class LeptonCameraWidget(qtw.QWidget):
                 s = int(s)
                 f = int(f * 1000)
                 lbl = "{:02d}:{:02d}:{:02d}.{:03d}".format(h, m, s, f)
-                cv2.putText(
-                    img_resized,
-                    "REC: {}".format(lbl),
-                    (10, int(height * 0.95)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255, 255, 255),
-                    2,
-                    2,
-                )
-
-            # update fps
-            den = (dt - self._last_dt).total_seconds()
-            fps = 0.0 if den == 0.0 else (1.0 / den)
-            cv2.putText(
-                img_resized,
-                "FPS: {:0.2f}".format(fps),
-                (int(width * 0.6), int(height * 0.1)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (255, 255, 255),
-                2,
-                2,
-            )
-            self._last_dt = dt
+                self.recordLabel.setText(lbl)
+            else:
+                self.recordLabel.setText("")
 
             # update the view
-            qimage = qimage2ndarray.array2qimage(img_resized)
-            self._camera_label.setPixmap(qtg.QPixmap.fromImage(qimage))
+            qimage = qimage2ndarray.array2qimage(heat)
+            self.cameraLabel.setPixmap(qtg.QPixmap.fromImage(qimage))
 
-    def _update_sampling_frequency(self):
-        """
-        update the sampling frequency according to the input value.
-        """
-        try:
-            fs = float(self._sampling_frequency_text.text())
-        except Exception:
-            txt = "The inputed sampling frequency is not valid."
-            self._make_message(txt)
-            self.set_sampling_frequency(self.sampling_frequency)
+            # update the fps
+            den = (dt - self._dt).total_seconds()
+            fps = 0.0 if den == 0.0 else (1.0 / den)
+            self.fpsLabel.setText("{:0.2f}".format(fps))
 
-        if fs <= 0 or fs > 8.5:
-            txt = "Sampling frequency must be in the (0, 8.5] range."
-            self._make_message(txt)
-            self.set_sampling_frequency(self.sampling_frequency)
-        else:
-            self.set_sampling_frequency(fs)
+            # update view and datetime
+            self._dt = dt
+
+        # adjust the size
+        self.adjustSize()
