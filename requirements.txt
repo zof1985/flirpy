@@ -4,3 +4,4 @@ qimage2ndarray
 numpy
 h5py
 opencv-python
+scipy
