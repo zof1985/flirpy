@@ -459,16 +459,16 @@ class LeptonCameraWidget(qtw.QWidget):
 
     # available colormaps
     _colormaps = {
+        "JET": cv2.COLORMAP_JET,
+        "HSV": cv2.COLORMAP_HSV,
         "AUTUMN": cv2.COLORMAP_AUTUMN,
         "BONE": cv2.COLORMAP_BONE,
-        "JET": cv2.COLORMAP_JET,
         "WINTER": cv2.COLORMAP_WINTER,
         "RAINBOW": cv2.COLORMAP_RAINBOW,
         "OCEAN": cv2.COLORMAP_OCEAN,
         "SUMMER": cv2.COLORMAP_SUMMER,
         "SPRING": cv2.COLORMAP_SPRING,
         "COOL": cv2.COLORMAP_COOL,
-        "HSV": cv2.COLORMAP_HSV,
         "PINK": cv2.COLORMAP_PINK,
         "HOT": cv2.COLORMAP_HOT,
         "PARULA": cv2.COLORMAP_PARULA,
