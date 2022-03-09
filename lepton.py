@@ -207,23 +207,11 @@ class LeptonCamera:
         """
         add a new frame to the buffer of readed data.
         """
-        # time data
-        dt = datetime.now()
-
-        # parse the thermal data to become a readable numpy array
-        img = np.fromiter(array, dtype="uint16").reshape(height, width)
-
-        # centikelvin --> celsius conversion
-        img = (img - 27315.0) / 100.0
-
-        # rotation
-        img = ndimage.rotate(img, self.angle)
-
-        # float16 conversion
-        img = img.astype(np.float16)
-
-        # update the last reading
-        self._last = [dt, img]
+        dt = datetime.now()  # time data
+        img = np.fromiter(array, dtype="uint16").reshape(height, width)  # parse
+        img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
+        img = ndimage.rotate(img, angle=self.angle, reshape=True)  # rotation
+        self._last = [dt, img.astype(np.float16)]  # update the last reading
 
     def capture(
         self,
@@ -314,13 +302,6 @@ class LeptonCamera:
         return the actual sampling frequency
         """
         return float(self._sampling_frequency)
-
-    @property
-    def shape(self) -> Tuple[int, int]:
-        """
-        return the shape of the collected images.
-        """
-        return (120, 160)
 
     def set_sampling_frequency(self, sampling_frequency: float) -> None:
         """
