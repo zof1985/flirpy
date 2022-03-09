@@ -103,7 +103,6 @@ def to_heatmap(img, colormap=cv2.COLORMAP_JET):
     gry = (1 - (img - np.min(img)) / (np.max(img) - np.min(img))) * 255
     gry = np.expand_dims(gry, 2).astype(np.uint8)
     gry = cv2.merge([gry, gry, gry])
-    # gry = cv2.applyColorMap(gry, cv2.COLORMAP_BONE)
 
     # converto to heatmap
     return cv2.applyColorMap(gry, colormap)
@@ -128,6 +127,7 @@ class LeptonCamera:
     _first = None
     _last = None
     _dt = 200
+    _angle = 0
     _sampling_frequency = 5
     _time_format = "%H:%M:%S.%f"
     _date_format = "%Y-%b-%d " + _time_format
@@ -200,6 +200,9 @@ class LeptonCamera:
         # set the sampling frequency
         self.set_sampling_frequency(sampling_frequency)
 
+        # set the rotation angle
+        self.set_angle(0)
+
     def _add_frame(self, array: bytearray, width: int, height: int) -> None:
         """
         add a new frame to the buffer of readed data.
@@ -209,7 +212,14 @@ class LeptonCamera:
 
         # parse the thermal data to become a readable numpy array
         img = np.fromiter(array, dtype="uint16").reshape(height, width)
-        img = (img - 27315.0) / 100.0  # centikelvin --> celsius conversion
+
+        # centikelvin --> celsius conversion
+        img = (img - 27315.0) / 100.0
+
+        # rotation
+        img = ndimage.rotate(img, self._angle)
+
+        # float16 conversion
         img = img.astype(np.float16)
 
         # update the last reading
@@ -328,6 +338,25 @@ class LeptonCamera:
         assert 0 < sampling_frequency <= 8.5, txt
         self._sampling_frequency = np.round(sampling_frequency, 1)
         self._dt = 1.0 / self.sampling_frequency
+
+    def set_angle(self, angle: float) -> None:
+        """
+        set the rotation angle in degrees.
+
+        Parameters
+        ----------
+        angle: float
+            the rotation angle in degrees.
+        """
+        assert isinstance(angle, float), "'angle' must be a float."
+        self._angle = angle
+
+    @property
+    def angle(self) -> float:
+        """
+        return the rotation angle
+        """
+        return self._angle
 
     def is_recording(self) -> bool:
         return self._first is not None
@@ -477,7 +506,6 @@ class LeptonCameraWidget(qtw.QWidget):
     _font_size = 10
     _size = 35
     _path = ""
-    _angle = 0
     _zoom = 1
     _timer = None
     _dt = None
@@ -551,7 +579,7 @@ class LeptonCameraWidget(qtw.QWidget):
         self.getDevice().set_sampling_frequency(freq)
         self._timer.start(int(round(1000.0 / freq)))
 
-    def setAngle(self) -> None:
+    def rotate(self) -> None:
         """
         set the rotation angle.
         """
@@ -670,7 +698,7 @@ class LeptonCameraWidget(qtw.QWidget):
         self.rotationButton.setFlat(True)
         self.rotationButton.setFixedHeight(self._size)
         self.rotationButton.setFixedWidth(self._size)
-        self.rotationButton.clicked.connect(self.setAngle)
+        self.rotationButton.clicked.connect(self.rotate)
         rotationLayout = qtw.QHBoxLayout()
         rotationLayout.setContentsMargins(2, 0, 2, 2)
         rotationLayout.addWidget(self.rotationButton)
