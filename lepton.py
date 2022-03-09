@@ -217,7 +217,7 @@ class LeptonCamera:
         img = (img - 27315.0) / 100.0
 
         # rotation
-        img = ndimage.rotate(img, self._angle)
+        img = ndimage.rotate(img, self.angle)
 
         # float16 conversion
         img = img.astype(np.float16)
@@ -348,7 +348,7 @@ class LeptonCamera:
         angle: float
             the rotation angle in degrees.
         """
-        assert isinstance(angle, float), "'angle' must be a float."
+        assert isinstance(angle, (int, float)), "'angle' must be a float."
         self._angle = angle
 
     @property
@@ -511,7 +511,9 @@ class LeptonCameraWidget(qtw.QWidget):
     _dt = None
     _view = None
     _colormap = list(_colormaps.values())[0]
-    _device = None
+
+    # device
+    _camera = None
 
     # widgets
     frequencyBox = None
@@ -531,7 +533,7 @@ class LeptonCameraWidget(qtw.QWidget):
         """
         return the actual device.
         """
-        return self._device
+        return self._camera
 
     def start(self):
         """
@@ -583,7 +585,8 @@ class LeptonCameraWidget(qtw.QWidget):
         """
         set the rotation angle.
         """
-        self._angle += 90
+        angle = self.getDevice().angle
+        self.getDevice().set_angle(angle + 90)
 
     def setZoom(self) -> None:
         """
@@ -747,11 +750,11 @@ class LeptonCameraWidget(qtw.QWidget):
 
         # set the lepton camera object
         if device is None:
-            self._device = LeptonCamera(sampling_frequency=5)
+            self._camera = LeptonCamera(sampling_frequency=5)
         else:
             txt = "device must be a LeptonCamera instance."
             assert isinstance(device, LeptonCamera), txt
-            self._device = device
+            self._camera = device
 
         # camera widget
         self.cameraLabel = qtw.QLabel()
@@ -848,7 +851,7 @@ class LeptonCameraWidget(qtw.QWidget):
         else:
             self.getDevice().interrupt()
             self.recButton.setText("● START RECORDING")
-            if len(self._device._data) > 0:
+            if len(self.getDevice()._data) > 0:
 
                 # let the user decide where to save the data
                 file_filters = "H5 (*.h5)"
@@ -908,18 +911,13 @@ class LeptonCameraWidget(qtw.QWidget):
             if self._dt is None:
                 self._dt = dt
 
-            # convert the last frame to an heatmap and apply the required
-            # rotation and zoom
-            img = img.astype(float)
-            img = ndimage.zoom(
-                input=ndimage.rotate(input=img, angle=self._angle),
-                zoom=self._zoom,
-            )
-            h, w = img.shape
-            self._view = img
-            heat = to_heatmap(img, self._colormap)
+            # update the view
+            self._view = ndimage.zoom(input=img.astype(float), zoom=self._zoom)
 
-            # set the recording overlay if required
+            # convert to heatmap
+            heat = to_heatmap(self._view, self._colormap)
+
+            # set the recording time if required
             if self.isRecording():
                 tt = dt - list(self.getDevice()._data.keys())[0]
                 tt = tt.total_seconds()
@@ -944,7 +942,7 @@ class LeptonCameraWidget(qtw.QWidget):
             fps = 0.0 if den == 0.0 else (1.0 / den)
             self.fpsLabel.setText("{:0.2f}".format(fps))
 
-            # update view and datetime
+            # update the datetime
             self._dt = dt
 
         # adjust the size
