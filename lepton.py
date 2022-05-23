@@ -144,7 +144,7 @@ class LeptonCamera:
         """
         constructor
         """
-        super(LeptonCamera, self).__init__()
+        # super(LeptonCamera, self).__init__()
 
         # find a valid device
         devices = []
