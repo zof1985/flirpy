@@ -112,12 +112,6 @@ class LeptonCamera:
     """
     Initialize a Lepton camera object capable of communicating to
     an pure thermal device equipped with a lepton 3.5 sensor.
-
-    Parameters
-    ----------
-    sampling_frequency: float, int
-        the sampling frequency in Hz for the camera readings.
-        It must be <= 8.5 Hz.
     """
 
     # class variables
@@ -128,7 +122,7 @@ class LeptonCamera:
     _last = None
     _dt = 200
     _angle = 0
-    _sampling_frequency = 5
+    _sampling_frequency = 8.5
     _time_format = "%H:%M:%S.%f"
     _date_format = "%Y-%b-%d " + _time_format
 
@@ -140,7 +134,7 @@ class LeptonCamera:
     def time_format(cls):
         return cls._time_format
 
-    def __init__(self, sampling_frequency: float = 5) -> None:
+    def __init__(self) -> None:
         """
         constructor
         """
@@ -196,9 +190,6 @@ class LeptonCamera:
 
         # path init
         self._path = os.path.sep.join(__file__.split(os.path.sep)[:-4])
-
-        # set the sampling frequency
-        self.set_sampling_frequency(sampling_frequency)
 
         # set the rotation angle
         self.set_angle(0)
@@ -603,7 +594,6 @@ class LeptonCameraWidget(qtw.QWidget):
         self.frequencyBox.setMinimum(1.0)
         self.frequencyBox.setSingleStep(0.1)
         self.frequencyBox.setMaximum(8.7)
-        self.frequencyBox.setValue(5.0)
         self.frequencyBox.setValue(5.0)
         self.frequencyBox.valueChanged.connect(self.setFrequency)
         frequencyLayout = qtw.QHBoxLayout()

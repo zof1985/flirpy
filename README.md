@@ -31,7 +31,7 @@ from numpy.random import permutation
 import os
 
 # initialize the camera object
-camera = LeptonCamera(sampling_frequency=5)
+camera = LeptonCamera()
 
 # capture 10 frames
 camera.capture(save=True, n_frames=10)
