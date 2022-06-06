@@ -3,7 +3,6 @@ from Lepton import CCI
 from typing import Tuple
 from scipy import ndimage
 from datetime import datetime
-from pyqtgraph import BusyCursor
 from IR16Filters import IR16Capture, NewBytesFrameEvent
 
 import PySide2.QtWidgets as qtw
@@ -1011,24 +1010,25 @@ class LeptonWidget(qtw.QWidget):
                     path += "." + ext
 
                 # save data
-                with BusyCursor():
-                    try:
-                        self.device.save(path)
-                        folders = path.split(os.path.sep)[:-1]
-                        self.path = os.path.sep.join(folders)
+                self.setCursor(qtc.Qt.WaitCursor)
+                try:
+                    self.device.save(path)
+                    folders = path.split(os.path.sep)[:-1]
+                    self.path = os.path.sep.join(folders)
 
-                    except TypeError as err:
-                        msgBox = qtw.QMessageBox()
-                        msgBox.setIcon(qtw.QMessageBox.Warning)
-                        msgBox.setText(err)
-                        msgBox.setFont(font)
-                        msgBox.setWindowTitle("ERROR")
-                        msgBox.setStandardButtons(qtw.QMessageBox.Ok)
-                        msgBox.exec()
+                except TypeError as err:
+                    msgBox = qtw.QMessageBox()
+                    msgBox.setIcon(qtw.QMessageBox.Warning)
+                    msgBox.setText(err)
+                    msgBox.setFont(font)
+                    msgBox.setWindowTitle("ERROR")
+                    msgBox.setStandardButtons(qtw.QMessageBox.Ok)
+                    msgBox.exec()
 
-                    # reset the camera buffer and restart the data streaming
+                # reset the camera buffer and restart the data streaming
+                finally:
+                    self.setCursor(qtc.Qt.ArrowCursor)
                     self.device.clear()
-                    self.device.capture(save=False)
         else:
             msgBox = qtw.QMessageBox()
             msgBox.setIcon(qtw.QMessageBox.Warning)
