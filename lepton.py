@@ -1,111 +1,69 @@
-# lepton 3.5 purethermal camera dll imports
-# the proper folder and file are defined by the __init__ file
+# imports
 from Lepton import CCI
-from IR16Filters import IR16Capture, NewBytesFrameEvent
-
-# python useful packages
-from datetime import datetime
 from typing import Tuple
 from scipy import ndimage
+from datetime import datetime
+from pyqtgraph import BusyCursor
+from IR16Filters import IR16Capture, NewBytesFrameEvent
+
 import PySide2.QtWidgets as qtw
 import PySide2.QtCore as qtc
 import PySide2.QtGui as qtg
-import qimage2ndarray
 import numpy as np
 import threading
-import time
 import h5py
 import json
-import sys
-import cv2
+import time
 import os
 
+# matplotlib options
+from matplotlib import use as matplotlib_use
 
-def read_file(filename: str) -> None:
+matplotlib_use("Qt5Agg")
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+import matplotlib.pyplot as plt
+import matplotlib.colors as plc
+
+plt.rc("font", size=3)  # controls default text sizes
+plt.rc("axes", titlesize=3)  # fontsize of the axes title
+plt.rc("axes", labelsize=3)  # fontsize of the x and y labels
+plt.rc("xtick", labelsize=3)  # fontsize of the x tick labels
+plt.rc("ytick", labelsize=3)  # fontsize of the y tick labels
+plt.rc("legend", fontsize=3)  # legend fontsize
+plt.rc("figure", titlesize=3)  # fontsize of the figure title
+plt.rc("figure", autolayout=True)
+
+font = qtg.QFont("Arial", 12)
+
+
+def get_QIcon(path, size=40):
     """
-    read the recorded data from file.
+    return a QIcon with the required size from file.
 
     Parameters
     ----------
-    filename: a valid filename path
+    path: str
+        the file to be used as icon.
+
+    size: int
+        the dimension of the icon.
 
     Returns
     -------
-    obj: dict
-        a dict where each key is a timestamp which contains the
-        corresponding image frame
-
-    Notes
-    -----
-    the file extension is used to desume which file format is used.
-    Available formats are:
-        - ".h5" (gzip format with compression 9)
-        - ".npz" (compressed numpy format)
-        - ".json"
+    icon: QIcon
+        the icon.
     """
+    # check the entries
+    assert os.path.exists(path), "path must be a valid file."
+    assert isinstance(size, int), "size must be an int."
 
-    # check filename and retrieve the file extension
-    assert isinstance(filename, str), "'filename' must be a str object."
-    extension = filename.split(".")[-1].lower()
-
-    # check the extension
-    valid_extensions = np.array(["npz", "json", "h5"])
-    txt = "file extension must be any of " + str(valid_extensions)
-    assert extension in valid_extensions, txt
-
-    # check if the file exists
-    assert os.path.exists(filename), "{} does not exists.".format(filename)
-
-    # timestamps parsing method
-    def to_datetime(txt):
-        return datetime.strptime(txt, LeptonCamera.date_format())
-
-    # obtain the readed objects
-    if extension == "json":  # json format
-        with open(filename, "r") as buf:
-            obj = json.load(buf)
-        timestamps = map(to_datetime, list(obj.keys()))
-        samples = np.array(list(obj.values())).astype(np.float16)
-
-    elif extension == "npz":  # npz format
-        with np.load(filename, allow_pickle=True) as obj:
-            timestamps = obj["timestamps"]
-            samples = obj["samples"]
-
-    elif extension == "h5":  # h5 format
-        with h5py.File(filename, "r") as obj:
-            timestamps = list(obj["timestamps"][:].astype(str))
-            timestamps = map(to_datetime, timestamps)
-            samples = obj["samples"][:].astype(np.float16)
-
-    return dict(zip(timestamps, samples))
-
-
-def to_heatmap(img, colormap=cv2.COLORMAP_JET):
-    """
-    convert a sampled frame to a opencv colorscaled map.
-
-    Parameters
-    ----------
-    img: 2D numpy.ndarray
-        the matrix containing the temperatures collected on one sample.
-
-    colormap: OpenCV colormap
-        the colormap to be used.
-
-    Returns
-    -------
-    heatmap: 2D numpy.ndarray
-        the matrix containing an heatmap representation of the provided
-        sample.
-    """
-    # convert to bone scale (flip the values)
-    gry = (1 - (img - np.min(img)) / (np.max(img) - np.min(img))) * 255
-    gry = np.expand_dims(gry, 2).astype(np.uint8)
-    gry = cv2.merge([gry, gry, gry])
-
-    # converto to heatmap
-    return cv2.applyColorMap(gry, colormap)
+    # get the icon
+    pixmap = qtg.QPixmap(path)
+    scaled = pixmap.scaledToHeight(
+        size,
+        mode=qtc.Qt.TransformationMode.SmoothTransformation,
+    )
+    return qtg.QIcon(scaled)
 
 
 class LeptonCamera:
@@ -118,28 +76,89 @@ class LeptonCamera:
     _device = None
     _reader = None
     _data = {}
+    _path = ""
     _first = None
     _last = None
     _dt = 200
     _angle = 0
-    _sampling_frequency = 8.5
-    _time_format = "%H:%M:%S.%f"
-    _date_format = "%Y-%b-%d " + _time_format
+    _sampling_frequency = 5
 
-    @classmethod
-    def date_format(cls):
-        return cls._date_format
+    @staticmethod
+    def time_format():
+        return "%H:%M:%S.%f"
 
-    @classmethod
-    def time_format(cls):
-        return cls._time_format
+    @staticmethod
+    def date_format():
+        return "%Y-%b-%d"
+
+    @staticmethod
+    def datetime_format():
+        return LeptonCamera.date_format() + " " + LeptonCamera.time_format()
+
+    @staticmethod
+    def read_file(filename: str) -> None:
+        """
+        read the recorded data from file.
+
+        Parameters
+        ----------
+        filename: a valid filename path
+
+        Returns
+        -------
+        obj: dict
+            a dict where each key is a timestamp which contains the
+            corresponding image frame
+
+        Notes
+        -----
+        the file extension is used to desume which file format is used.
+        Available formats are:
+            - ".h5" (gzip format with compression 9)
+            - ".npz" (compressed numpy format)
+            - ".json"
+        """
+
+        # check filename and retrieve the file extension
+        assert isinstance(filename, str), "'filename' must be a str object."
+        extension = filename.split(".")[-1].lower()
+
+        # check the extension
+        valid_extensions = np.array(["npz", "json", "h5"])
+        txt = "file extension must be any of " + str(valid_extensions)
+        assert extension in valid_extensions, txt
+
+        # check if the file exists
+        assert os.path.exists(filename), "{} does not exists.".format(filename)
+
+        # timestamps parsing method
+        def to_datetime(txt):
+            return datetime.strptime(txt, LeptonCamera.datetime_format())
+
+        # obtain the readed objects
+        if extension == "json":  # json format
+            with open(filename, "r") as buf:
+                obj = json.load(buf)
+            timestamps = map(to_datetime, list(obj.keys()))
+            samples = np.array(list(obj.values())).astype(np.float16)
+
+        elif extension == "npz":  # npz format
+            with np.load(filename, allow_pickle=True) as obj:
+                timestamps = obj["timestamps"]
+                samples = obj["samples"]
+
+        elif extension == "h5":  # h5 format
+            with h5py.File(filename, "r") as obj:
+                timestamps = list(obj["timestamps"][:].astype(str))
+                timestamps = map(to_datetime, timestamps)
+                samples = obj["samples"][:].astype(np.float16)
+
+        return dict(zip(timestamps, samples))
 
     def __init__(self) -> None:
         """
         constructor
         """
-        # super(LeptonCamera, self).__init__()
-
         # find a valid device
         devices = []
         for i in CCI.GetDevices():
@@ -190,6 +209,9 @@ class LeptonCamera:
 
         # path init
         self._path = os.path.sep.join(__file__.split(os.path.sep)[:-4])
+
+        # set the sampling frequency
+        self.set_sampling_frequency(5)
 
         # set the rotation angle
         self.set_angle(0)
@@ -247,11 +269,23 @@ class LeptonCamera:
         # frequency
         if save:
             self._first = self._last
+            self._data[self._last[0]] = self._last[1]
 
             def store():
+                old = list(self._data.keys())[-1]
+                processing_time = 0
+                n = 0
                 while self._first is not None:
-                    self._data[self._last[0]] = self._last[1]
-                    time.sleep(self._dt)
+                    dt = (self._last[0] - old).total_seconds()
+                    if dt >= self._dt - processing_time:
+                        tic = time.time()
+                        self._data[self._last[0]] = self._last[1]
+                        old = self._last[0]
+                        toc = time.time()
+                        tm = toc - tic
+                        processing_time = processing_time * n + tm
+                        n += 1
+                        processing_time /= n
 
             t = threading.Thread(target=store)
             t.start()
@@ -263,11 +297,11 @@ class LeptonCamera:
                 while self._first is None:
                     pass
                 dt = 0
-                while dt < seconds:
+                while dt < time:
                     dt = (self._last[0] - self._first[0]).total_seconds()
                 self.interrupt()
 
-            t = threading.Thread(target=stop_reading, args=[time])
+            t = threading.Thread(target=stop_reading, args=[seconds])
             t.run()
 
         elif n_frames is not None:
@@ -404,7 +438,7 @@ class LeptonCamera:
 
         if extension == "json":  # json format
             times, samples = self.to_numpy()
-            times = [i.strftime(self._date_format) for i in times]
+            times = [i.strftime(LeptonCamera.datetime_format()) for i in times]
             samples = samples.tolist()
             with open(filename, "w") as buf:
                 json.dump(dict(zip(times, samples)), buf)
@@ -416,7 +450,7 @@ class LeptonCamera:
         elif extension == "h5":  # h5 format
             hf = h5py.File(filename, "w")
             times, samples = self.to_numpy()
-            times = [i.strftime(self._date_format) for i in times]
+            times = [i.strftime(LeptonCamera.datetime_format()) for i in times]
             hf.create_dataset(
                 "timestamps",
                 data=times,
@@ -436,84 +470,486 @@ class LeptonCamera:
             raise TypeError(txt)
 
 
-class LeptonCameraWidget(qtw.QWidget):
+class Runnable(qtc.QRunnable):
     """
-    Initialize a PySide2 widget capable of communicating to
-    an pure thermal device equipped with a lepton 3.5 sensor.
+    generalize a runnable object to start multithreading functions.
 
     Parameters
     ----------
-    sampling_frequency: float, int
-        the sampling frequency in Hz for the camera readings.
-        It must be <= 8.7 Hz.
+    fun: function
+        the function to be runned
+
+    **kwargs: any
+        optional parameters that are passed to fun as it starts
     """
 
-    # available colormaps
-    _colormaps = {
-        "JET": cv2.COLORMAP_JET,
-        "HSV": cv2.COLORMAP_HSV,
-        "AUTUMN": cv2.COLORMAP_AUTUMN,
-        "BONE": cv2.COLORMAP_BONE,
-        "WINTER": cv2.COLORMAP_WINTER,
-        "RAINBOW": cv2.COLORMAP_RAINBOW,
-        "OCEAN": cv2.COLORMAP_OCEAN,
-        "SUMMER": cv2.COLORMAP_SUMMER,
-        "SPRING": cv2.COLORMAP_SPRING,
-        "COOL": cv2.COLORMAP_COOL,
-        "PINK": cv2.COLORMAP_PINK,
-        "HOT": cv2.COLORMAP_HOT,
-        "PARULA": cv2.COLORMAP_PARULA,
-        "MAGMA": cv2.COLORMAP_MAGMA,
-        "INFERNO": cv2.COLORMAP_INFERNO,
-        "PLASMA": cv2.COLORMAP_PLASMA,
-        "VIRIDIS": cv2.COLORMAP_VIRIDIS,
-        "CIVIDIS": cv2.COLORMAP_CIVIDIS,
-        "TWILIGHT": cv2.COLORMAP_TWILIGHT,
-        "TWILIGHT_SHIFTED": cv2.COLORMAP_TWILIGHT_SHIFTED,
-        "TURBO": cv2.COLORMAP_TURBO,
-        "DEEPGREEN": cv2.COLORMAP_DEEPGREEN,
-    }
+    fun = None
+    kwargs = {}
+
+    def __init__(self, fun, **kwargs):
+        super().__init__()
+        self.fun = fun
+        self.kwargs = kwargs
+
+    def run(self):
+        return self.fun(**self.kwargs)
+
+
+class RecordingWidget(qtw.QWidget):
+    """
+    Initialize a PySide2 widget capable showing a checkable button for
+    recording things and showing the recording time.
+    """
+
+    button = None
+    label = None
+    start_time = None
+    timer = None
+    label_format = "{:02d}:{:02d}:{:02d}"
+    started = qtc.Signal()
+    stopped = qtc.Signal()
+    _size = 50
+
+    def __init__(self):
+        super().__init__()
+
+        # generate the output layout
+        layout = qtw.QHBoxLayout()
+        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # recording time
+        self.label = qtw.QLabel(self.label_format.format(0, 0, 0, 0))
+        self.label.setFont(font)
+
+        # rec button
+        path = os.path.sep.join(__file__.split(os.path.sep)[:-1])
+        rec_file = os.path.sep.join([path, "_contents", "rec.png"])
+        rec_icon = get_QIcon(rec_file, self._size)
+        self.button = qtw.QPushButton()
+        self.button.setFlat(True)
+        self.button.setCheckable(True)
+        self.button.setContentsMargins(0, 0, 0, 0)
+        self.button.setIcon(rec_icon)
+        self.button.setFixedHeight(self._size)
+        self.button.setFixedWidth(self._size)
+        self.button.clicked.connect(self.clicked)
+
+        # generate the output
+        layout.addWidget(self.button)
+        layout.addWidget(self.label)
+        self.setLayout(layout)
+
+        # start the timer runnable
+        self.timer = qtc.QTimer()
+        self.timer.timeout.connect(self.update_time)
+
+    def update_time(self):
+        """
+        timer function
+        """
+        if self.start_time is not None:
+            now = time.time()
+            delta = now - self.start_time
+            h = int(delta // 3600)
+            m = int((delta - h * 3600) // 60)
+            s = int((delta - h * 3600 - m * 60) // 1)
+            self.label.setText(self.label_format.format(h, m, s))
+        else:
+            self.label.setText(self.label_format.format(0, 0, 0))
+
+    def clicked(self):
+        """
+        function handling the clicking of the recording button.
+        """
+        if self.button.isChecked():  # the recording starts
+            self.start_time = time.time()
+            self.timer.start(1000)
+            self.started.emit()
+
+        else:  # the recording stops
+            self.start_time = None
+            self.stopped.emit()
+
+
+class ThermalHoverWidget(qtw.QWidget):
+    """
+    defines a thermal image hover table object.
+    """
+
+    # class variable
+    fps = None
+    fps_format = "{:0.2f}"
+    coords = None
+    coords_format = "({:0.0f},{:0.0f})"
+    temp = None
+    temp_format = "{:0.2f}°C"
+
+    def __init__(self):
+        super().__init__()
+        layout = qtw.QGridLayout()
+
+        # add the labels
+        for i, v in enumerate(["FPS:", "(X,Y):", "Temperature:"]):
+            lab = qtw.QLabel(v)
+            lab.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignLeft)
+            lab.setFont(font)
+            layout.addWidget(lab, i, 0)
+
+        # add the fps
+        self.fps = qtw.QLabel("")
+        self.fps.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
+        self.fps.setFont(font)
+        layout.addWidget(self.fps, 0, 1)
+
+        # add coords
+        self.coords = qtw.QLabel("")
+        self.coords.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
+        self.coords.setFont(font)
+        layout.addWidget(self.coords, 1, 1)
+
+        # add temperature
+        self.temp = qtw.QLabel("")
+        self.temp.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
+        self.temp.setFont(font)
+        layout.addWidget(self.temp, 2, 1)
+
+        # setup the layout
+        self.setLayout(layout)
+        flags = qtc.Qt.FramelessWindowHint | qtc.Qt.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+
+    def update(self, fps=None, x=None, y=None, temp=None):
+        """
+        update the hover parameters.
+
+        Parameters
+        ----------
+        fps: float
+            the fps value
+
+        x: int
+            the x coordinate
+
+        y: int
+            the y coordinate
+
+        temp: float
+            the temperature value
+        """
+        if fps is not None:
+            self.fps.setText(self.fps_format.format(fps))
+        if x is not None and y is not None:
+            self.coords.setText(self.coords_format.format(x, y))
+        if temp is not None:
+            self.temp.setText(self.temp_format.format(temp))
+
+
+class FigureWidget(FigureCanvasQTAgg):
+    """
+    Generate a QWidget incorporating a matplotlib Figure.
+    Animated artists can be provided to ensure optimal performances.
+
+    Parameters
+    ----------
+    figure: matplotlib Figure
+        the figure to be rendered.
+
+    artists: list
+        the list of artists that have to be animated.
+    """
+
+    # class variables
+    figure = None
+    animated_artists = {}
+    _background = None
+    _cid = None
+    _res = None
+
+    def __init__(self, figure, animated_artists={}):
+        super().__init__(figure)
+        self.figure = figure
+        self._background = None
+        self.add_artists(**animated_artists)
+        self._res = self.figure.canvas.mpl_connect(
+            "resize_event",
+            self._resize_event,
+        )
+        self._cid = self.figure.canvas.mpl_connect(
+            "draw_event",
+            self.on_draw,
+        )
+
+    def add_artists(self, **kwargs):
+        """
+        add animated artists to the animator.
+        """
+        for key, value in kwargs.items():
+            value.set_animated(True)
+            self.animated_artists[key] = value
+            self.figure.add_artist(value)
+
+    def on_draw(self, event):
+        """
+        Callback to register with 'draw_event'.
+        """
+        if event is not None:
+            if event.canvas != self.figure.canvas:
+                raise RuntimeError
+        bbox = self.figure.canvas.figure.bbox
+        self._background = self.figure.canvas.copy_from_bbox(bbox)
+        self._draw_animated()
+
+    def _draw_animated(self):
+        """
+        Draw all of the animated artists.
+        """
+        for a in self.animated_artists.values():
+            self.figure.canvas.figure.draw_artist(a)
+
+    def update_view(self):
+        """
+        Update the screen with animated artists.
+        """
+
+        # update the background if required
+        if self._background is None:
+            self.on_draw(None)
+
+        else:
+
+            # restore the background
+            self.figure.canvas.restore_region(self._background)
+
+            # draw all of the animated artists
+            self._draw_animated()
+
+            # update the GUI state
+            self.figure.canvas.blit(self.figure.canvas.figure.bbox)
+
+        # let the GUI event loop process anything it has to do
+        self.figure.canvas.flush_events()
+
+    def _resize_event(self, event):
+        """
+        handle object resizing.
+        """
+        self.figure.tight_layout()
+        self.figure.canvas.draw()
+
+
+class ThermalImageWidget(FigureWidget):
+    """
+    defines a thermal image object.
+
+    Parameters
+    ----------
+    colormap: str
+        any valid matplotlib colormap.
+    """
+
+    # class variables
+    _old = time.time()
+    data = None
+    event = None
+
+    def __init__(self, colormap: str = "viridis") -> None:
+
+        # generate the figure and axis
+        fig, ax = plt.subplots(1, 1, dpi=300)
+        ax.set_axis_off()  # remove all axes
+
+        # get the artist and its colorbar
+        dt = np.atleast_2d(np.linspace(0, 1, 100))
+        dt = (dt.T @ dt) * 50
+        art = ax.imshow(dt, cmap=colormap, aspect=1)
+
+        # store the data
+        super().__init__(fig, {"image": art})
+        self.axis = ax
+
+        # add the colorbar
+        cb = fig.colorbar(
+            art,
+            ax=ax,
+            location="bottom",
+            anchor=(0.5, 1.0),
+            shrink=0.66,
+            fraction=0.075,
+            pad=0.05,
+            format="%.1f°C",
+            orientation="horizontal",
+        )
+        cb.minorticks_on()
+        self.colorbar = cb
+
+        # create the hover mask
+        self.hover_widget = ThermalHoverWidget()
+        self.hover_widget.setVisible(False)
+
+        # mouse tracking
+        self._ax_in = self.figure.canvas.mpl_connect(
+            "axes_enter_event",
+            self.enter_event,
+        )
+        self._ax_out = self.figure.canvas.mpl_connect(
+            "axes_leave_event",
+            self.leave_event,
+        )
+        self._ax_move = self.figure.canvas.mpl_connect(
+            "motion_notify_event",
+            self.move_event,
+        )
+
+    def update_image(self, data: np.ndarray) -> None:
+        """
+        render the provided data.
+
+        Parameters
+        ----------
+        data: 2D numpy.ndarray
+            the matrix containing the temperatures collected on one sample.
+        """
+        # check the entries
+        txt = "data must be a 2D array."
+        assert isinstance(data, np.ndarray), txt
+        assert data.ndim == 2, txt
+        self.data = data
+
+        # update the image data
+        self.animated_artists["image"].set_data(data)
+        ext = [0, data.shape[1], data.shape[0], 0]
+        self.animated_artists["image"].set_extent(ext)
+        norm = plc.Normalize(np.min(data), np.max(data))
+        self.animated_artists["image"].set_norm(norm)
+
+        # update the colorbar data
+        bounds = np.linspace(np.min(data), np.max(data), 6)
+        self.colorbar.set_ticks(bounds)
+        self.colorbar.vmin = bounds[0]
+        self.colorbar.vmax = bounds[1]
+        self.colorbar.draw_all()
+
+        # update the view
+        self.update_view()
+
+        # update the hover data
+        if self.event is not None:
+            self.update_hover()
+
+    def update_hover(self):
+        """
+        update the hover as required.
+
+        Parameters
+        ----------
+        pos: MouseEvent
+            the event containing the mouse position.
+        """
+        try:
+            # get the temperature
+            x = int(round(self.event.xdata))
+            y = int(round(self.event.ydata))
+            t = self.data[y, x]
+
+            # update the fps
+            new = time.time()
+            delta = new - self._old
+            fps = (1 / delta) if delta > 0 else 0
+            self._old = new
+            self.hover_widget.update(fps, x, y, t)
+
+            # adjust the hover position
+            xmax, ymax = self.event.canvas._lastKey[:2]
+            y = ymax - self.event.y
+            x = self.event.x
+            x_off = int(round(xmax * 0.01))
+            y_off = int(round(ymax * 0.01))
+            pnt = self.mapToGlobal(qtc.QPoint(x + x_off, y + y_off))
+            self.hover_widget.move(pnt.x(), pnt.y())
+
+        except Exception:
+            pass
+
+    def enter_event(self, event):
+        """
+        handle the entry of the mouse over the area.
+        """
+        self.hover_widget.setVisible(True)
+        self.event = event
+        self.update_hover()
+
+    def leave_event(self, event):
+        """
+        handle the entry of the mouse over the area.
+        """
+        self.hover_widget.setVisible(False)
+        self.event = None
+
+    def move_event(self, event):
+        """
+        handle the movement of the mouse over the area.
+        """
+        if self.hover_widget.isVisible():
+            self.event = event
+            self.update_hover()
+
+
+class LeptonWidget(qtw.QWidget):
+    """
+    Initialize a PySide2 widget capable of communicating to
+    an pure thermal device equipped with a lepton 3.5 sensor.
+    """
 
     # private variables
-    _font_size = 10
-    _size = 35
-    _path = ""
-    _zoom = 1
-    _timer = None
-    _dt = None
-    _view = None
-    _colormap = list(_colormaps.values())[0]
+    _size = 50
+    timer = None
+    zoom_spinbox = None
+    frequency_spinbox = None
+    thermal_image = None
+    rotation_button = None
+    recording_pane = None
+    opt_pane = None
+    device = None
 
-    # device
-    _camera = None
-
-    # widgets
-    frequencyBox = None
-    zoomBox = None
-    cameraLabel = None
-    rotationButton = None
-    colorBox = None
-    quitButton = None
-    recButton = None
-    optionsPane = None
-    savePopup = None
-    pointerLabel = None
-    fpsLabel = None
-    recordLabel = None
-
-    def getDevice(self):
+    def _create_box(self, title, obj):
         """
-        return the actual device.
+        create a groupbox with the given title and incorporating obj.
+
+        Parameters
+        ----------
+        title: str
+            the box title
+
+        obj: QWidget
+            the object to be included
+
+        Returns
+        -------
+        box: QGroupBox
+            the box.
         """
-        return self._camera
+        # check the entries
+        assert isinstance(title, str), "title must be a string."
+        assert isinstance(obj, qtw.QWidget), "obj must be a QWidget."
+
+        # generate the input layout
+        layout = qtw.QHBoxLayout()
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(obj)
+        pane = qtw.QGroupBox(title)
+        pane.setLayout(layout)
+        pane.setFont(font)
+        return pane
 
     def start(self):
         """
         start the timer.
         """
         try:
-            self._timer.stop()
-            self._timer.start(int(round(1000.0 / self.getFrequency())))
+            self.timer.stop()
+            self.timer.start(int(round(1000.0 * self.device._dt)))
         except Exception:
             pass
 
@@ -521,401 +957,163 @@ class LeptonCameraWidget(qtw.QWidget):
         """
         make the widget visible.
         """
-        self.getDevice().capture(save=False)
+        self.device.capture(save=False)
         self.start()
-        super(LeptonCameraWidget, self).show()
+        super().show()
 
-    def close(self) -> None:
-        """
-        terminate the app.
-        """
-        sys.exit()
-
-    def isRecording(self):
-        """
-        check if the camera is recording data.
-        """
-        return self.getDevice().is_recording()
-
-    def getFrequency(self) -> float:
-        """
-        return the actual sampling frequency
-        """
-        return self.getDevice().sampling_frequency
-
-    def setFrequency(self) -> None:
+    def update_frequency(self) -> None:
         """
         set the sampling frequency.
         """
-        # update the timer time
-        self._timer.stop()
-        freq = self.frequencyBox.value()
-        self.getDevice().set_sampling_frequency(freq)
-        self._timer.start(int(round(1000.0 / freq)))
+        fs = self.frequency_spinbox.value()
+        self.device.set_sampling_frequency(fs)
+        self.device.interrupt()
+        self.start()
 
     def rotate(self) -> None:
         """
         set the rotation angle.
         """
-        angle = self.getDevice().angle
-        self.getDevice().set_angle(angle + 90)
+        self.device.set_angle(self.device.angle + 90)
 
-    def setZoom(self) -> None:
+    def rec_start(self):
         """
-        set the actual zoom.
+        function handling what happens at the start of the recording.
         """
-        self._zoom = self.zoomBox.value()
+        self.device.interrupt()
+        self.device.capture(save=True)
 
-    def setColor(self, text) -> None:
+    def rec_stop(self):
         """
-        set the actual colormap
+        function handling what happens at the stop of the recording.
         """
-        self._colormap = self._colormaps[text]
+        self.device.interrupt()
+        if len(self.device._data) > 0:
 
-    def getFrame(self):
-        """
-        return the last frame view.
-        It returns None if no value has been sampled.
-        """
-        return self._dt, self._view
+            # let the user decide where to save the data
+            file_filters = "H5 (*.h5)"
+            file_filters += ";;NPZ (*.npz)"
+            file_filters += ";;JSON (*.json)"
+            options = qtw.QFileDialog.Options()
+            options |= qtw.QFileDialog.DontUseNativeDialog
+            path, ext = qtw.QFileDialog.getSaveFileName(
+                parent=self,
+                filter=file_filters,
+                dir=self.path,
+                options=options,
+            )
 
-    def __init__(self, device: LeptonCamera = None, parent=None) -> None:
-        """
-        constructor
-        """
-        super(LeptonCameraWidget, self).__init__(parent=parent)
-        self.font = qtg.QFont("Arial", self._font_size)
-        self._path = os.path.sep.join(__file__.split(os.path.sep)[:-1])
+            # prepare the data
+            if len(path) > 0:
+                path = path.replace("/", os.path.sep)
+                ext = ext.split(" ")[0].lower()
+                if not path.endswith(ext):
+                    path += "." + ext
 
-        # sampling frequency
-        self.frequencyBox = qtw.QDoubleSpinBox()
-        self.frequencyBox.setFont(self.font)
-        self.frequencyBox.setDecimals(1)
-        self.frequencyBox.setMinimum(1.0)
-        self.frequencyBox.setSingleStep(0.1)
-        self.frequencyBox.setMaximum(8.7)
-        self.frequencyBox.setValue(5.0)
-        self.frequencyBox.valueChanged.connect(self.setFrequency)
-        frequencyLayout = qtw.QHBoxLayout()
-        frequencyLayout.setSpacing(0)
-        frequencyLayout.setContentsMargins(0, 0, 0, 0)
-        frequencyLayout.addWidget(self.frequencyBox)
-        frequencyPane = qtw.QGroupBox("Sampling frequency (Hz)")
-        frequencyPane.setLayout(frequencyLayout)
-
-        # zoom
-        self.zoomBox = qtw.QDoubleSpinBox()
-        self.zoomBox.setFont(self.font)
-        self.zoomBox.setDecimals(1)
-        self.zoomBox.setMinimum(1)
-        self.zoomBox.setMaximum(5)
-        self.zoomBox.setSingleStep(0.1)
-        self.zoomBox.setValue(3)
-        self.zoomBox.valueChanged.connect(self.setZoom)
-        zoomLayout = qtw.QHBoxLayout()
-        zoomLayout.setSpacing(0)
-        zoomLayout.setContentsMargins(0, 0, 0, 0)
-        zoomLayout.addWidget(self.zoomBox)
-        zoomPane = qtw.QGroupBox("Zoom (X times)")
-        zoomPane.setLayout(zoomLayout)
-
-        # colormaps
-        self.colorBox = qtw.QComboBox()
-        self.colorBox.addItems(list(self._colormaps.keys()))
-        self.colorBox.setFont(self.font)
-        self.colorBox.currentTextChanged.connect(self.setColor)
-        colorLayout = qtw.QHBoxLayout()
-        colorLayout.setSpacing(0)
-        colorLayout.setContentsMargins(0, 0, 0, 0)
-        colorLayout.addWidget(self.colorBox)
-        colorPane = qtw.QGroupBox("Colormap")
-        colorPane.setLayout(colorLayout)
-
-        # options pane
-        optLine = qtw.QWidget()
-        optLayout = qtw.QHBoxLayout()
-        optLayout.addWidget(frequencyPane)
-        optLayout.addWidget(zoomPane)
-        optLayout.setSpacing(0)
-        optLayout.setContentsMargins(0, 0, 0, 0)
-        optLine.setLayout(optLayout)
-        optionsLayout = qtw.QVBoxLayout()
-        optionsLayout.addWidget(optLine)
-        optionsLayout.addWidget(colorPane)
-        optionsLayout.setSpacing(0)
-        optionsLayout.setContentsMargins(0, 0, 0, 0)
-        self.optionsPane = qtw.QWidget()
-        self.optionsPane.setLayout(optionsLayout)
-
-        # pointer label
-        self.pointerLabel = qtw.QLabel("")
-        self.pointerLabel.setFont(self.font)
-        self.pointerLabel.setAlignment(qtc.Qt.AlignCenter | qtc.Qt.AlignVCenter)
-        pointerLayout = qtw.QHBoxLayout()
-        pointerLayout.setSpacing(0)
-        pointerLayout.setContentsMargins(0, 0, 0, 0)
-        pointerLayout.addWidget(self.pointerLabel)
-        pointerPane = qtw.QGroupBox("Pointer temp. (°C)")
-        pointerPane.setLayout(pointerLayout)
-
-        # fps label
-        self.fpsLabel = qtw.QLabel("")
-        self.fpsLabel.setFont(self.font)
-        self.fpsLabel.setAlignment(qtc.Qt.AlignCenter | qtc.Qt.AlignVCenter)
-        fpsLayout = qtw.QHBoxLayout()
-        fpsLayout.setSpacing(0)
-        fpsLayout.setContentsMargins(0, 0, 0, 0)
-        fpsLayout.addWidget(self.fpsLabel)
-        fpsPane = qtw.QGroupBox("FPS")
-        fpsPane.setLayout(fpsLayout)
-
-        # camera rotation
-        self.rotationButton = qtw.QPushButton()
-        icon = os.path.sep.join([self._path, "_contents", "rotation.png"])
-        icon = qtg.QIcon(qtg.QPixmap(icon).scaled(self._size, self._size))
-        self.rotationButton.setIcon(icon)
-        self.rotationButton.setFlat(True)
-        self.rotationButton.setFixedHeight(self._size)
-        self.rotationButton.setFixedWidth(self._size)
-        self.rotationButton.clicked.connect(self.rotate)
-        rotationLayout = qtw.QHBoxLayout()
-        rotationLayout.setSpacing(0)
-        rotationLayout.setContentsMargins(0, 0, 0, 0)
-        rotationLayout.addWidget(self.rotationButton)
-        rotationPane = qtw.QGroupBox("Rotate 90°")
-        rotationPane.setLayout(rotationLayout)
-
-        # data pane
-        dataLayout = qtw.QHBoxLayout()
-        dataLayout.setContentsMargins(0, 0, 0, 0)
-        dataLayout.setSpacing(10)
-        dataLayout.addWidget(pointerPane)
-        dataLayout.addWidget(fpsPane)
-        dataLayout.addWidget(rotationPane)
-        dataPane = qtw.QWidget()
-        dataPane.setLayout(dataLayout)
-
-        # record pane
-        self.recordLabel = qtw.QLabel("")
-        self.recordLabel.setFont(self.font)
-        self.recordLabel.setAlignment(qtc.Qt.AlignCenter | qtc.Qt.AlignVCenter)
-        recordLayout = qtw.QHBoxLayout()
-        recordLayout.setSpacing(0)
-        recordLayout.setContentsMargins(0, 0, 0, 0)
-        recordLayout.addWidget(self.recordLabel)
-        recordPane = qtw.QGroupBox("Recording time")
-        recordPane.setLayout(recordLayout)
-
-        # quit button
-        self.quitButton = qtw.QPushButton("QUIT")
-        self.quitButton.setFixedHeight(self._size)
-        self.quitButton.clicked.connect(self.close)
-
-        # rec button
-        self.recButton = qtw.QPushButton("● START RECORDING")
-        self.recButton.setFixedHeight(self._size)
-        self.recButton.clicked.connect(self.record)
-        self.recButton.setCheckable(True)
-
-        # buttons pane
-        buttonLayout = qtw.QHBoxLayout()
-        buttonLayout.addWidget(self.recButton)
-        buttonLayout.addWidget(self.quitButton)
-        buttonLayout.setSpacing(10)
-        buttonLayout.setContentsMargins(2, 2, 2, 2)
-        buttonPane = qtw.QWidget()
-        buttonPane.setLayout(buttonLayout)
-
-        # set the lepton camera object
-        if device is None:
-            self._camera = LeptonCamera(sampling_frequency=5)
-        else:
-            txt = "device must be a LeptonCamera instance."
-            assert isinstance(device, LeptonCamera), txt
-            self._camera = device
-
-        # camera widget
-        self.cameraLabel = qtw.QLabel()
-        self.cameraLabel.setMouseTracking(True)
-        self.cameraLabel.installEventFilter(self)
-
-        # main layout
-        layout = qtw.QVBoxLayout()
-        layout.addWidget(self.cameraLabel)
-        layout.addWidget(dataPane)
-        layout.addWidget(self.optionsPane)
-        layout.addWidget(recordPane)
-        layout.addWidget(buttonPane)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(layout)
-        icon = os.path.sep.join([self._path, "_contents", "main.png"])
-        icon = qtg.QIcon(qtg.QPixmap(icon).scaled(self._size, self._size))
-        self.setWindowIcon(icon)
-        self.setWindowTitle("LeptonCameraWidget")
-
-        # data saving popup
-        save_gif = os.path.sep.join([self._path, "_contents", "save.gif"])
-        movie = qtg.QMovie(save_gif)
-        animation = qtw.QLabel()
-        animation.setFixedSize(256, 256)
-        animation.setMovie(movie)
-        movie.start()
-        message = qtw.QLabel("SAVING COLLECTED DATA")
-        message.setAlignment(qtc.Qt.AlignCenter)
-        message.setFont(self.font)
-        diagLayout = qtw.QVBoxLayout()
-        diagLayout.addWidget(animation)
-        diagLayout.addWidget(message)
-        popup = qtw.QDialog()
-        popup.setWindowFlags(qtc.Qt.FramelessWindowHint)
-        popup.setModal(True)
-        popup.setLayout(diagLayout)
-        popup.setWindowTitle("Saving data")
-        popup.show()
-        popup.hide()
-        self.savePopup = popup
-
-        # stream handlers
-        self._timer = qtc.QTimer()
-        self._timer.timeout.connect(self.updateView)
-
-        # setup the pointer temperature
-        self._pointer_temp = "°C"
-
-        # initialize the parameters
-        self.setFrequency()
-        self.setZoom()
-        self.setColor(list(self._colormaps.keys())[0])
-
-    def eventFilter(self, source: qtw.QWidget, event: qtc.QEvent) -> None:
-        """
-        calculate the temperature-related numbers.
-        """
-        # check if the pointer is on the image
-        # and update pointer temperature
-        if source == self.cameraLabel:
-            if event.type() == qtc.QEvent.MouseMove:
-                if self.getDevice()._last is not None:
-                    view = self.getFrame()[1]
+                # save data
+                with BusyCursor():
                     try:
-                        temp = view[event.y(), event.x()]
-                        self.pointerLabel.setText("{:0.1f}".format(temp))
-                    except Exception:
-                        self.pointerLabel.setText("")
-
-            # the pointer leaves the image,
-            # thus no temperature has to be shown
-            elif event.type() == qtc.QEvent.Leave:
-                self.pointerLabel.setText("")
-
-        return False
-
-    def record(self) -> None:
-        """
-        start and stop the recording of the data.
-        """
-        if self.recButton.isChecked():
-            self.getDevice().interrupt()
-            self.getDevice().capture(save=True)
-            self.recButton.setText("■ STOP RECORDING")
-
-        else:
-            self.getDevice().interrupt()
-            self.recButton.setText("● START RECORDING")
-            if len(self.getDevice()._data) > 0:
-
-                # let the user decide where to save the data
-                file_filters = "H5 (*.h5)"
-                file_filters += ";;NPZ (*.npz)"
-                file_filters += ";;JSON (*.json)"
-                options = qtw.QFileDialog.Options()
-                options |= qtw.QFileDialog.DontUseNativeDialog
-                path, ext = qtw.QFileDialog.getSaveFileName(
-                    parent=self,
-                    filter=file_filters,
-                    dir=self._path,
-                    options=options,
-                )
-
-                # prepare the data
-                if len(path) > 0:
-                    path = path.replace("/", os.path.sep)
-                    ext = ext.split(" ")[0].lower()
-                    if not path.endswith(ext):
-                        path += "." + ext
-
-                    # save data
-                    try:
-                        self.savePopup.show()
-                        self.getDevice().save(path)
-                        self._path = ".".join(path.split(".")[:-1])
+                        self.device.save(path)
+                        folders = path.split(os.path.sep)[:-1]
+                        self.path = os.path.sep.join(folders)
 
                     except TypeError as err:
                         msgBox = qtw.QMessageBox()
                         msgBox.setIcon(qtw.QMessageBox.Warning)
                         msgBox.setText(err)
-                        msgBox.setFont(qtg.QFont("Arial", self._font_size))
+                        msgBox.setFont(font)
                         msgBox.setWindowTitle("ERROR")
                         msgBox.setStandardButtons(qtw.QMessageBox.Ok)
                         msgBox.exec()
 
-                    finally:
-                        self.savePopup.hide()
+                    # reset the camera buffer and restart the data streaming
+                    self.device.clear()
+                    self.device.capture(save=False)
+        else:
+            msgBox = qtw.QMessageBox()
+            msgBox.setIcon(qtw.QMessageBox.Warning)
+            msgBox.setText("NO DATA HAVE BEEN COLLECTED.")
+            msgBox.setFont(font)
+            msgBox.setWindowTitle("ERROR")
+            msgBox.setStandardButtons(qtw.QMessageBox.Ok)
+            msgBox.exec()
+        self.start()
 
-                # reset the camera buffer and restart the data streaming
-                self.getDevice().clear()
-                self.getDevice().capture(save=False)
-
-    def updateView(self) -> None:
+    def update_view(self) -> None:
         """
         update the last frame and display it.
         """
-        # no view is available
-        if self.getDevice()._last is None:
-            self._view = None
-            self._dt = None
+        # NOTE: rotation is handled by LeptonCamera as it directly affects
+        # the way the data are collected
+        if self.device._last is not None:
+            self.thermal_image.update_image(self.device._last[1])
 
-        else:
-            dt, img = self.getDevice()._last
+    def __init__(self) -> None:
+        """
+        constructor
+        """
+        super().__init__()
 
-            # update the last datetime if required
-            if self._dt is None:
-                self._dt = dt
+        # actual path
+        self.path = os.path.sep.join(__file__.split(os.path.sep)[:-1])
 
-            # update the view
-            self._view = ndimage.zoom(input=img.astype(float), zoom=self._zoom)
+        # find the Lepton Camera device
+        self.device = LeptonCamera()
 
-            # convert to heatmap
-            heat = to_heatmap(self._view, self._colormap)
+        # sampling frequency
+        self.frequency_spinbox = qtw.QDoubleSpinBox()
+        self.frequency_spinbox.setFont(font)
+        self.frequency_spinbox.setDecimals(1)
+        self.frequency_spinbox.setMinimum(1.0)
+        self.frequency_spinbox.setSingleStep(0.1)
+        self.frequency_spinbox.setMaximum(8.7)
+        self.frequency_spinbox.setValue(5.0)
+        self.frequency_spinbox.valueChanged.connect(self.update_frequency)
+        freq_box = self._create_box("Frequency (Hz)", self.frequency_spinbox)
 
-            # set the recording time if required
-            if self.isRecording():
-                tt = dt - list(self.getDevice()._data.keys())[0]
-                tt = tt.total_seconds()
-                h, remainder = divmod(tt, 3600)
-                m, remainder = divmod(remainder, 60)
-                s, f = divmod(remainder, 1)
-                h = int(h)
-                m = int(m)
-                s = int(s)
-                f = int(f * 1000)
-                lbl = "{:02d}:{:02d}:{:02d}.{:03d}".format(h, m, s, f)
-                self.recordLabel.setText(lbl)
-            else:
-                self.recordLabel.setText("")
+        # camera rotation
+        rotation_icon_path = [self.path, "_contents", "rotation.png"]
+        rotation_icon_path = os.path.sep.join(rotation_icon_path)
+        rotation_icon = get_QIcon(rotation_icon_path, self._size)
+        self.rotation_button = qtw.QPushButton(icon=rotation_icon)
+        self.rotation_button.setFlat(True)
+        self.rotation_button.setFixedHeight(self._size)
+        self.rotation_button.setFixedWidth(self._size)
+        self.rotation_button.clicked.connect(self.rotate)
+        rotation_box = self._create_box("Rotate 90°", self.rotation_button)
 
-            # update the view
-            qimage = qimage2ndarray.array2qimage(heat)
-            self.cameraLabel.setPixmap(qtg.QPixmap.fromImage(qimage))
+        # recording
+        self.recording_pane = RecordingWidget()
+        self.recording_pane.started.connect(self.rec_start)
+        self.recording_pane.stopped.connect(self.rec_stop)
+        recording_box = self._create_box("Data recording", self.recording_pane)
 
-            # update the fps
-            den = (dt - self._dt).total_seconds()
-            fps = 0.0 if den == 0.0 else (1.0 / den)
-            self.fpsLabel.setText("{:0.2f}".format(fps))
+        # setup the options panel
+        self.opt_pane = qtw.QWidget()
+        opt_layout = qtw.QHBoxLayout()
+        opt_layout.setSpacing(2)
+        opt_layout.setContentsMargins(0, 0, 0, 0)
+        opt_layout.addWidget(freq_box)
+        opt_layout.addWidget(rotation_box)
+        opt_layout.addWidget(recording_box)
+        self.opt_pane.setLayout(opt_layout)
+        self.opt_pane.setFixedHeight(int(round(self._size * 1.5)))
 
-            # update the datetime
-            self._dt = dt
+        # thermal image
+        self.thermal_image = ThermalImageWidget()
 
-        # adjust the size
-        self.adjustSize()
+        # widget layout
+        layout = qtw.QVBoxLayout()
+        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.thermal_image)
+        layout.addWidget(self.opt_pane)
+        self.setLayout(layout)
+        icon = os.path.sep.join([self.path, "_contents", "main.png"])
+        self.setWindowIcon(get_QIcon(icon, self._size))
+        self.setWindowTitle("LeptonWidget")
+
+        # stream handlers
+        self.timer = qtc.QTimer()
+        self.timer.timeout.connect(self.update_view)
+        self.update_frequency()
