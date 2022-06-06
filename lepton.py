@@ -23,6 +23,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 import matplotlib.pyplot as plt
 import matplotlib.colors as plc
 
+# default options for matplotlib
 plt.rc("font", size=3)  # controls default text sizes
 plt.rc("axes", titlesize=3)  # fontsize of the axes title
 plt.rc("axes", labelsize=3)  # fontsize of the x and y labels
@@ -31,7 +32,6 @@ plt.rc("ytick", labelsize=3)  # fontsize of the y tick labels
 plt.rc("legend", fontsize=3)  # legend fontsize
 plt.rc("figure", titlesize=3)  # fontsize of the figure title
 plt.rc("figure", autolayout=True)
-
 font = qtg.QFont("Arial", 12)
 
 
@@ -749,8 +749,12 @@ class ThermalImageWidget(FigureWidget):
 
     # class variables
     _old = time.time()
-    data = None
+    data = np.atleast_2d([])
     event = None
+    _tick_formatter = "{:0.1f}°C"
+    bounds = [1e5, -1e5]
+    cycles = 300
+    max_cycles = 300
 
     def __init__(self, colormap: str = "viridis") -> None:
 
@@ -776,7 +780,6 @@ class ThermalImageWidget(FigureWidget):
             shrink=0.66,
             fraction=0.075,
             pad=0.05,
-            format="%.1f°C",
             orientation="horizontal",
         )
         cb.minorticks_on()
@@ -800,7 +803,7 @@ class ThermalImageWidget(FigureWidget):
             self.move_event,
         )
 
-    def update_image(self, data: np.ndarray) -> None:
+    def update_view(self, data: np.ndarray) -> None:
         """
         render the provided data.
 
@@ -813,28 +816,48 @@ class ThermalImageWidget(FigureWidget):
         txt = "data must be a 2D array."
         assert isinstance(data, np.ndarray), txt
         assert data.ndim == 2, txt
-        self.data = data
 
         # update the image data
         self.animated_artists["image"].set_data(data)
         ext = [0, data.shape[1], data.shape[0], 0]
         self.animated_artists["image"].set_extent(ext)
-        norm = plc.Normalize(np.min(data), np.max(data))
-        self.animated_artists["image"].set_norm(norm)
 
         # update the colorbar data
-        bounds = np.linspace(np.min(data), np.max(data), 6)
-        self.colorbar.set_ticks(bounds)
-        self.colorbar.vmin = bounds[0]
-        self.colorbar.vmax = bounds[1]
-        self.colorbar.draw_all()
+        if np.min(data) < self.bounds[0]:
+            self.bounds[0] = np.min(data)
+        if np.max(data) > self.bounds[1]:
+            self.bounds[1] = np.max(data)
+        new_min = self.colorbar.vmin > self.bounds[0]
+        new_max = self.colorbar.vmax < self.bounds[1]
+        self.cycles += 1
+        force_adjustment = self.cycles > self.max_cycles
+        if new_min or new_max or force_adjustment:
+            if force_adjustment:
+                self.cycles = 0
 
-        # update the view
-        self.update_view()
+            # update the bar
+            self.colorbar.set_ticks(self.bounds)
+            labels = [self._tick_formatter.format(i) for i in self.bounds]
+            self.colorbar.set_ticklabels(labels)
+            self.colorbar.vmin = self.bounds[0]
+            self.colorbar.vmax = self.bounds[1]
+
+            # adjust the color normalization of the image
+            norm = plc.Normalize(*self.bounds)
+            self.animated_artists["image"].set_norm(norm)
+
+        # resize if appropriate
+        new_shape = self.data.shape[0] != data.shape[0]
+        new_shape |= self.data.shape[1] != data.shape[1]
+        if new_shape:
+            self._resize_event(None)
+        self.data = data
 
         # update the hover data
         if self.event is not None:
             self.update_hover()
+
+        super().update_view()
 
     def update_hover(self):
         """
@@ -862,36 +885,35 @@ class ThermalImageWidget(FigureWidget):
             xmax, ymax = self.event.canvas._lastKey[:2]
             y = ymax - self.event.y
             x = self.event.x
-            x_off = int(round(xmax * 0.01))
-            y_off = int(round(ymax * 0.01))
+            x_off = int(round(xmax * 0.05))
+            y_off = int(round(ymax * 0.05))
             pnt = self.mapToGlobal(qtc.QPoint(x + x_off, y + y_off))
             self.hover_widget.move(pnt.x(), pnt.y())
 
         except Exception:
-            pass
+            self.leave_event()
 
-    def enter_event(self, event):
+    def enter_event(self, event=None):
         """
         handle the entry of the mouse over the area.
         """
-        self.hover_widget.setVisible(True)
-        self.event = event
-        self.update_hover()
+        self.move_event(event)
 
-    def leave_event(self, event):
+    def leave_event(self, event=None):
         """
         handle the entry of the mouse over the area.
         """
         self.hover_widget.setVisible(False)
         self.event = None
 
-    def move_event(self, event):
+    def move_event(self, event=None):
         """
         handle the movement of the mouse over the area.
         """
-        if self.hover_widget.isVisible():
-            self.event = event
-            self.update_hover()
+        if not self.hover_widget.isVisible():
+            self.hover_widget.setVisible(True)
+        self.event = event
+        self.update_hover()
 
 
 class LeptonWidget(qtw.QWidget):
@@ -1046,7 +1068,7 @@ class LeptonWidget(qtw.QWidget):
         # NOTE: rotation is handled by LeptonCamera as it directly affects
         # the way the data are collected
         if self.device._last is not None:
-            self.thermal_image.update_image(self.device._last[1])
+            self.thermal_image.update_view(self.device._last[1])
 
     def __init__(self) -> None:
         """
