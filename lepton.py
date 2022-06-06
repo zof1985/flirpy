@@ -862,11 +862,6 @@ class ThermalImageWidget(FigureWidget):
     def update_hover(self):
         """
         update the hover as required.
-
-        Parameters
-        ----------
-        pos: MouseEvent
-            the event containing the mouse position.
         """
         try:
             # get the temperature
