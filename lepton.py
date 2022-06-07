@@ -854,13 +854,13 @@ class FigureWidget(FigureCanvasQTAgg):
 
     def enter_event(self, event=None):
         """
-        handle the entry of the mouse over the area.
+        handle the entry of the mouse in the area.
         """
         self.move_event(event)
 
     def leave_event(self, event=None):
         """
-        handle the entry of the mouse over the area.
+        handle the leaving of the mouse from the area.
         """
         self.hover_widget.setVisible(False)
         self.event = None
