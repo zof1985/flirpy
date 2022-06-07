@@ -775,10 +775,7 @@ class FigureWidget(FigureCanvasQTAgg):
         txt = "artist must be a matplotlib.artist.Artist."
         assert isinstance(artist, matplotlib.artist.Artist), txt
         assert isinstance(name, str), "name must be a str."
-
-        # add the artist to the list of "animated" artists
         self.artists[name] = artist
-        self.figure.add_artist(artist)
 
     def on_draw(self, event):
         """
