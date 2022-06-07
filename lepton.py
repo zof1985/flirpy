@@ -583,7 +583,8 @@ class HoverWidget(qtw.QWidget):
     def __init__(self):
         super().__init__()
         self.layout = qtw.QGridLayout()
-        self.layout.setSpacing(2)
+        self.layout.setHorizontalSpacing(20)
+        self.layout.setVerticalSpacing(10)
         self.layout.setContentsMargins(10, 10, 10, 10)
         flags = qtc.Qt.FramelessWindowHint | qtc.Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
