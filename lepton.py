@@ -4,24 +4,22 @@ from typing import Tuple
 from scipy import ndimage
 from datetime import datetime
 from IR16Filters import IR16Capture, NewBytesFrameEvent
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 
 import PySide2.QtWidgets as qtw
 import PySide2.QtCore as qtc
 import PySide2.QtGui as qtg
 import numpy as np
+import matplotlib
+
+matplotlib.use("Qt5Agg")
+import matplotlib.pyplot as plt
+import matplotlib.colors as plc
 import threading
 import h5py
 import json
 import time
 import os
-
-# matplotlib options
-from matplotlib import use as matplotlib_use
-
-matplotlib_use("Qt5Agg")
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-import matplotlib.pyplot as plt
-import matplotlib.colors as plc
 
 # default options for matplotlib
 plt.rc("font", size=3)  # controls default text sizes
@@ -571,77 +569,122 @@ class RecordingWidget(qtw.QWidget):
             self.stopped.emit()
 
 
-class ThermalHoverWidget(qtw.QWidget):
+class HoverWidget(qtw.QWidget):
     """
-    defines a thermal image hover table object.
+    defines a hover pane to be displayed over a matplotlib figure.
     """
 
     # class variable
-    fps = None
-    fps_format = "{:0.2f}"
-    coords = None
-    coords_format = "({:0.0f},{:0.0f})"
-    temp = None
-    temp_format = "{:0.2f}°C"
+    labels = {}
+    formatters = {}
+    artists = {}
+    layout = None
 
     def __init__(self):
         super().__init__()
-        layout = qtw.QGridLayout()
-
-        # add the labels
-        for i, v in enumerate(["FPS:", "(X,Y):", "Temperature:"]):
-            lab = qtw.QLabel(v)
-            lab.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignLeft)
-            lab.setFont(font)
-            layout.addWidget(lab, i, 0)
-
-        # add the fps
-        self.fps = qtw.QLabel("")
-        self.fps.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
-        self.fps.setFont(font)
-        layout.addWidget(self.fps, 0, 1)
-
-        # add coords
-        self.coords = qtw.QLabel("")
-        self.coords.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
-        self.coords.setFont(font)
-        layout.addWidget(self.coords, 1, 1)
-
-        # add temperature
-        self.temp = qtw.QLabel("")
-        self.temp.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
-        self.temp.setFont(font)
-        layout.addWidget(self.temp, 2, 1)
-
-        # setup the layout
-        self.setLayout(layout)
+        self.layout = qtw.QGridLayout()
+        self.layout.setSpacing(2)
+        self.layout.setContentsMargins(10, 10, 10, 10)
         flags = qtc.Qt.FramelessWindowHint | qtc.Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
 
-    def update(self, fps=None, x=None, y=None, temp=None):
+    def add_label(
+        self,
+        name: str,
+        unit: str,
+        digits: int,
+    ):
+        """
+        add a new label to the hover.
+
+        Parameters
+        ----------
+        name: str
+            the name of the axis
+
+        unit: str
+            the unit of measurement to be displayed.
+
+        digits: int
+            the number of digits to be displayed by the hover.
+        """
+        # check the entries
+        assert isinstance(name, str), "name must be a str."
+        assert isinstance(unit, str), "unit must be a str."
+        assert isinstance(digits, int), "digits must be an int."
+        assert digits >= 0, "digits must be >= 0."
+
+        # add the new label
+        n = len(self.labels)
+        name_label = qtw.QLabel(name)
+        name_label.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignRight)
+        name_label.setFont(font)
+        self.layout.addWidget(name_label, n, 0)
+        self.labels[name] = qtw.QLabel("")
+        self.labels[name].setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignLeft)
+        self.labels[name].setFont(font)
+        self.layout.addWidget(self.labels[name], n, 1)
+        self.setLayout(self.layout)
+        self.formatters[name] = lambda x: self.unit_formatter(x, unit, digits)
+
+    def update(self, **labels):
         """
         update the hover parameters.
 
         Parameters
         ----------
-        fps: float
-            the fps value
-
-        x: int
-            the x coordinate
-
-        y: int
-            the y coordinate
-
-        temp: float
-            the temperature value
+        labels: any
+            keyworded values to be updated
         """
-        if fps is not None:
-            self.fps.setText(self.fps_format.format(fps))
-        if x is not None and y is not None:
-            self.coords.setText(self.coords_format.format(x, y))
-        if temp is not None:
-            self.temp.setText(self.temp_format.format(temp))
+        for label, value in labels.items():
+            self.labels[label].setText(self.formatters[label](value))
+
+    def unit_formatter(
+        self,
+        x: Tuple[int, float],
+        unit: str = "",
+        digits: int = 1,
+    ):
+        """
+        return the letter linked to the order of magnitude of x.
+
+        Parameters
+        ----------
+        x: int, float
+            the value to be visualized
+
+        unit: str
+            the unit of measurement
+
+        digits: int
+            the number of digits required when displaying x.
+        """
+
+        # check the entries
+        assert isinstance(x, (int, float)), "x must be a float or int."
+        assert isinstance(unit, str), "unit must be a str."
+        assert isinstance(digits, int), "digits must be an int."
+        assert digits >= 0, "digits must be >= 0."
+
+        if unit != "":
+
+            # get the magnitude
+            mag = np.floor(np.log10(abs(x))) * np.sign(x)
+
+            # scale the magnitude
+            unit_letters = ["p", "n", "μ", "m", "", "k", "M", "G", "T"]
+            unit_magnitudes = np.arange(-12, 10, 3)
+            index = int((min(12, max(-12, mag)) + 12) // 3)
+
+            # get the value
+            v = x / (10.0 ** unit_magnitudes[index])
+            letter = unit_letters[index]
+        else:
+            v = x
+            letter = ""
+
+        # return the value formatted
+        return ("{:0." + str(digits) + "f} {}{}").format(v, letter, unit)
 
 
 class FigureWidget(FigureCanvasQTAgg):
@@ -654,22 +697,33 @@ class FigureWidget(FigureCanvasQTAgg):
     figure: matplotlib Figure
         the figure to be rendered.
 
-    artists: list
-        the list of artists that have to be animated.
+    hover_offset_x: float
+        the percentage of the screen width that offsets the hover with respect
+        to the position of the mouse.
+
+    hover_offset_y: float
+        the percentage of the screen height that offsets the hover with respect
+        to the position of the mouse.
     """
 
     # class variables
     figure = None
-    animated_artists = {}
+    artists = {}
+    hover_widget = None
     _background = None
     _cid = None
     _res = None
+    _ax_in = None
+    _ax_out = None
+    _ax_move = None
+    hover_offset_x = None
+    hover_offset_y = None
+    event = None
 
-    def __init__(self, figure, animated_artists={}):
+    def __init__(self, figure, hover_offset_x=0.02, hover_offset_y=0.02):
         super().__init__(figure)
         self.figure = figure
         self._background = None
-        self.add_artists(**animated_artists)
         self._res = self.figure.canvas.mpl_connect(
             "resize_event",
             self._resize_event,
@@ -679,14 +733,51 @@ class FigureWidget(FigureCanvasQTAgg):
             self.on_draw,
         )
 
-    def add_artists(self, **kwargs):
+        # mouse tracking
+        self._ax_in = self.figure.canvas.mpl_connect(
+            "axes_enter_event",
+            self.enter_event,
+        )
+        self._ax_out = self.figure.canvas.mpl_connect(
+            "axes_leave_event",
+            self.leave_event,
+        )
+        self._ax_move = self.figure.canvas.mpl_connect(
+            "motion_notify_event",
+            self.move_event,
+        )
+
+        # create the hover mask
+        self.hover_widget = HoverWidget()
+        self.hover_widget.setVisible(False)
+        height = self.frameSize().height()
+        width = self.frameSize().width()
+        self.hover_offset_x = int(round(hover_offset_x * width))
+        self.hover_offset_y = int(round(hover_offset_y * height))
+
+    def add_artist(
+        self,
+        artist: matplotlib.artist.Artist,
+        name: str,
+    ) -> None:
         """
-        add animated artists to the animator.
+        add a new (animated) artist to the object.
+
+        Parameters
+        ----------
+        artist: matplotlib.artist.Artist
+            the artist to be added
+
+        name: str
+            the name of the axis
         """
-        for key, value in kwargs.items():
-            value.set_animated(True)
-            self.animated_artists[key] = value
-            self.figure.add_artist(value)
+        txt = "artist must be a matplotlib.artist.Artist."
+        assert isinstance(artist, matplotlib.artist.Artist), txt
+        assert isinstance(name, str), "name must be a str."
+
+        # add the artist to the list of "animated" artists
+        self.artists[name] = artist
+        self.figure.add_artist(artist)
 
     def on_draw(self, event):
         """
@@ -703,7 +794,7 @@ class FigureWidget(FigureCanvasQTAgg):
         """
         Draw all of the animated artists.
         """
-        for a in self.animated_artists.values():
+        for a in self.artists.values():
             self.figure.canvas.figure.draw_artist(a)
 
     def update_view(self):
@@ -729,12 +820,61 @@ class FigureWidget(FigureCanvasQTAgg):
         # let the GUI event loop process anything it has to do
         self.figure.canvas.flush_events()
 
-    def _resize_event(self, event):
+    def update_hover(
+        self,
+        event: matplotlib.backend_bases.Event,
+        **values,
+    ) -> None:
+        """
+        update the hover position.
+
+        Parameters
+        ----------
+        event: matplotlib.backend_bases.Event
+            the event causing the hover update.
+
+        values: any
+            the values to be used for updating the hover.
+        """
+        if event is None:
+            self.leave_event()
+        else:
+            ymax = event.canvas._lastKey[1]
+            y = ymax - event.y + self.hover_offset_y
+            x = event.x + self.hover_offset_x
+            pnt = self.mapToGlobal(qtc.QPoint(x, y))
+            self.hover_widget.move(pnt.x(), pnt.y())
+            self.hover_widget.update(**values)
+            self.event = event
+
+    def _resize_event(self, event=None):
         """
         handle object resizing.
         """
         self.figure.tight_layout()
         self.figure.canvas.draw()
+
+    def enter_event(self, event=None):
+        """
+        handle the entry of the mouse over the area.
+        """
+        self.move_event(event)
+
+    def leave_event(self, event=None):
+        """
+        handle the entry of the mouse over the area.
+        """
+        self.hover_widget.setVisible(False)
+        self.event = None
+
+    def move_event(self, event=None):
+        """
+        handle the movement of the mouse over the area.
+        """
+        n = len(self.hover_widget.labels)
+        if not self.hover_widget.isVisible() and n > 0:
+            self.hover_widget.setVisible(True)
+        self.update_hover(event)
 
 
 class ThermalImageWidget(FigureWidget):
@@ -751,7 +891,7 @@ class ThermalImageWidget(FigureWidget):
     _old = time.time()
     data = np.atleast_2d([])
     event = None
-    _tick_formatter = "{:0.1f}°C"
+    _colorbar_formatter = "{:0.1f}°C"
     bounds = [1e5, -1e5]
 
     def __init__(self, colormap: str = "viridis") -> None:
@@ -759,6 +899,7 @@ class ThermalImageWidget(FigureWidget):
         # generate the figure and axis
         fig, ax = plt.subplots(1, 1, dpi=300)
         ax.set_axis_off()  # remove all axes
+        ax.autoscale_view("tight")
 
         # get the artist and its colorbar
         dt = np.atleast_2d(np.linspace(0, 1, 100))
@@ -766,8 +907,9 @@ class ThermalImageWidget(FigureWidget):
         art = ax.imshow(dt, cmap=colormap, aspect=1)
 
         # store the data
-        super().__init__(fig, {"image": art})
+        super().__init__(fig)
         self.axis = ax
+        self.add_artist(artist=art, name="image")
 
         # add the colorbar
         cb = fig.colorbar(
@@ -784,22 +926,9 @@ class ThermalImageWidget(FigureWidget):
         self.colorbar = cb
 
         # create the hover mask
-        self.hover_widget = ThermalHoverWidget()
-        self.hover_widget.setVisible(False)
-
-        # mouse tracking
-        self._ax_in = self.figure.canvas.mpl_connect(
-            "axes_enter_event",
-            self.enter_event,
-        )
-        self._ax_out = self.figure.canvas.mpl_connect(
-            "axes_leave_event",
-            self.leave_event,
-        )
-        self._ax_move = self.figure.canvas.mpl_connect(
-            "motion_notify_event",
-            self.move_event,
-        )
+        self.hover_widget.add_label("x", "", 0)
+        self.hover_widget.add_label("y", "", 0)
+        self.hover_widget.add_label("temperature", "°C", 1)
 
     def update_view(self, data: np.ndarray, force: bool = False) -> None:
         """
@@ -821,9 +950,9 @@ class ThermalImageWidget(FigureWidget):
         assert data.ndim == 2, txt
 
         # update the image data
-        self.animated_artists["image"].set_data(data)
+        self.artists["image"].set_data(data)
         ext = [0, data.shape[1], data.shape[0], 0]
-        self.animated_artists["image"].set_extent(ext)
+        self.artists["image"].set_extent(ext)
 
         # update the colorbar data
         if np.min(data) < self.bounds[0] or force:
@@ -836,14 +965,14 @@ class ThermalImageWidget(FigureWidget):
 
             # update the bar
             self.colorbar.set_ticks(self.bounds)
-            labels = [self._tick_formatter.format(i) for i in self.bounds]
+            labels = [self._colorbar_formatter.format(i) for i in self.bounds]
             self.colorbar.set_ticklabels(labels)
             self.colorbar.vmin = self.bounds[0]
             self.colorbar.vmax = self.bounds[1]
 
             # adjust the color normalization of the image
             norm = plc.Normalize(*self.bounds)
-            self.animated_artists["image"].set_norm(norm)
+            self.artists["image"].set_norm(norm)
 
         # resize if appropriate
         new_shape = self.data.shape[0] != data.shape[0]
@@ -852,62 +981,25 @@ class ThermalImageWidget(FigureWidget):
             self._resize_event(None)
         self.data = data
 
-        # update the hover data
-        if self.event is not None:
-            self.update_hover()
-
+        # update the view and the hover
         super().update_view()
+        self.update_hover(self.event)
 
-    def update_hover(self):
+    def update_hover(self, event=None):
         """
         update the hover as required.
         """
-        try:
-            # get the temperature
-            x = int(round(self.event.xdata))
-            y = int(round(self.event.ydata))
-            t = self.data[y, x]
-
-            # update the fps
-            new = time.time()
-            delta = new - self._old
-            fps = (1 / delta) if delta > 0 else 0
-            self._old = new
-            self.hover_widget.update(fps, x, y, t)
-
-            # adjust the hover position
-            xmax, ymax = self.event.canvas._lastKey[:2]
-            y = ymax - self.event.y
-            x = self.event.x
-            x_off = int(round(xmax * 0.05))
-            y_off = int(round(ymax * 0.05))
-            pnt = self.mapToGlobal(qtc.QPoint(x + x_off, y + y_off))
-            self.hover_widget.move(pnt.x(), pnt.y())
-
-        except Exception:
+        if event is not None:
+            if event.xdata is not None and event.ydata is not None:
+                x = int(round(event.xdata))
+                y = int(round(event.ydata))
+                t = float(self.data[y, x])
+                labels = {"x": x, "y": y, "temperature": t}
+                super().update_hover(event, **labels)
+            else:
+                self.leave_event()
+        else:
             self.leave_event()
-
-    def enter_event(self, event=None):
-        """
-        handle the entry of the mouse over the area.
-        """
-        self.move_event(event)
-
-    def leave_event(self, event=None):
-        """
-        handle the entry of the mouse over the area.
-        """
-        self.hover_widget.setVisible(False)
-        self.event = None
-
-    def move_event(self, event=None):
-        """
-        handle the movement of the mouse over the area.
-        """
-        if not self.hover_widget.isVisible():
-            self.hover_widget.setVisible(True)
-        self.event = event
-        self.update_hover()
 
 
 class LeptonWidget(qtw.QWidget):
@@ -923,6 +1015,7 @@ class LeptonWidget(qtw.QWidget):
     frequency_spinbox = None
     thermal_image = None
     rotation_button = None
+    status_bar = None
     recording_pane = None
     opt_pane = None
     device = None
@@ -1059,10 +1152,14 @@ class LeptonWidget(qtw.QWidget):
         """
         update the last frame and display it.
         """
+        tic = time.time()
         # NOTE: rotation is handled by LeptonCamera as it directly affects
         # the way the data are collected
         if self.device._last is not None:
             self.thermal_image.update_view(self.device._last[1])
+        toc = time.time()
+        fps = 0 if toc == tic else (1 / (toc - tic))
+        self.status_bar.setText("FPS: {:0.1f}".format(fps))
 
     def __init__(self) -> None:
         """
@@ -1118,12 +1215,21 @@ class LeptonWidget(qtw.QWidget):
         # thermal image
         self.thermal_image = ThermalImageWidget()
 
+        # status bar
+        self.status_bar = qtw.QLabel("")
+        size = font.pixelSize()
+        family = font.family()
+        self.status_bar.setFont(qtg.QFont(family, size // 2))
+        self.status_bar.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignLeft)
+        self.status_bar.setFixedHeight(self.status_bar.sizeHint().height())
+
         # widget layout
         layout = qtw.QVBoxLayout()
         layout.setSpacing(2)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.thermal_image)
         layout.addWidget(self.opt_pane)
+        layout.addWidget(self.status_bar)
         self.setLayout(layout)
         icon = os.path.sep.join([self.path, "_contents", "main.png"])
         self.setWindowIcon(get_QIcon(icon, self._size))
