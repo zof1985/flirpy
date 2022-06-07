@@ -753,8 +753,6 @@ class ThermalImageWidget(FigureWidget):
     event = None
     _tick_formatter = "{:0.1f}°C"
     bounds = [1e5, -1e5]
-    cycles = 300
-    max_cycles = 300
 
     def __init__(self, colormap: str = "viridis") -> None:
 
@@ -803,7 +801,7 @@ class ThermalImageWidget(FigureWidget):
             self.move_event,
         )
 
-    def update_view(self, data: np.ndarray) -> None:
+    def update_view(self, data: np.ndarray, force=False) -> None:
         """
         render the provided data.
 
@@ -811,6 +809,11 @@ class ThermalImageWidget(FigureWidget):
         ----------
         data: 2D numpy.ndarray
             the matrix containing the temperatures collected on one sample.
+
+        force: bool
+            if True, force the redraw of the colorbar and perform a new color
+            normalization.
+
         """
         # check the entries
         txt = "data must be a 2D array."
@@ -823,17 +826,13 @@ class ThermalImageWidget(FigureWidget):
         self.animated_artists["image"].set_extent(ext)
 
         # update the colorbar data
-        if np.min(data) < self.bounds[0]:
+        if np.min(data) < self.bounds[0] or force:
             self.bounds[0] = np.min(data)
-        if np.max(data) > self.bounds[1]:
+        if np.max(data) > self.bounds[1] or force:
             self.bounds[1] = np.max(data)
         new_min = self.colorbar.vmin > self.bounds[0]
         new_max = self.colorbar.vmax < self.bounds[1]
-        self.cycles += 1
-        force_adjustment = self.cycles > self.max_cycles
-        if new_min or new_max or force_adjustment:
-            if force_adjustment:
-                self.cycles = 0
+        if new_min or new_max or force:
 
             # update the bar
             self.colorbar.set_ticks(self.bounds)
