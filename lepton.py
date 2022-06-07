@@ -801,7 +801,7 @@ class ThermalImageWidget(FigureWidget):
             self.move_event,
         )
 
-    def update_view(self, data: np.ndarray, force: bool = False) -> None:
+    def update_view(self, data: np.ndarray, force=False) -> None:
         """
         render the provided data.
 
