@@ -1201,12 +1201,12 @@ class LeptonWidget(qtw.QWidget):
 
         # setup the options panel
         self.opt_pane = qtw.QWidget()
-        opt_layout = qtw.QHBoxLayout()
+        opt_layout = qtw.QGridLayout()
         opt_layout.setSpacing(2)
         opt_layout.setContentsMargins(0, 0, 0, 0)
-        opt_layout.addWidget(freq_box)
-        opt_layout.addWidget(rotation_box)
-        opt_layout.addWidget(recording_box)
+        opt_layout.addWidget(freq_box, 0, 0)
+        opt_layout.addWidget(rotation_box, 0, 0)
+        opt_layout.addWidget(recording_box, 0, 0)
         self.opt_pane.setLayout(opt_layout)
         self.opt_pane.setFixedHeight(int(round(self._size * 1.5)))
 
