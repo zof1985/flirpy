@@ -708,10 +708,10 @@ class FigureWidget(FigureCanvasQTAgg):
     """
 
     # class variables
-    figure = None
-    artists = {}
+    _artists = {}
     hover_widget = None
     _background = None
+    _fig = None
     _cid = None
     _res = None
     _ax_in = None
@@ -721,9 +721,10 @@ class FigureWidget(FigureCanvasQTAgg):
     hover_offset_y = None
     event = None
 
-    def __init__(self, figure, hover_offset_x=0.02, hover_offset_y=0.02):
-        super().__init__(figure)
-        self.figure = figure
+    def __init__(self, hover_offset_x=0.02, hover_offset_y=0.02):
+        fig = plt.figure(dpi=300)
+        super().__init__(fig)
+        self._fig = fig
         self._background = None
         self._res = self.figure.canvas.mpl_connect(
             "resize_event",
@@ -775,7 +776,7 @@ class FigureWidget(FigureCanvasQTAgg):
         txt = "artist must be a matplotlib.artist.Artist."
         assert isinstance(artist, matplotlib.artist.Artist), txt
         assert isinstance(name, str), "name must be a str."
-        self.artists[name] = artist
+        self._artists[name] = artist
 
     def on_draw(self, event):
         """
@@ -792,7 +793,7 @@ class FigureWidget(FigureCanvasQTAgg):
         """
         Draw all of the animated artists.
         """
-        for a in self.artists.values():
+        for a in self._artists.values():
             self.figure.canvas.figure.draw_artist(a)
 
     def update_view(self):
@@ -889,30 +890,39 @@ class ThermalImageWidget(FigureWidget):
     _old = time.time()
     data = np.atleast_2d([])
     event = None
+    colorbar = None
     _colorbar_formatter = "{:0.1f}°C"
     bounds = [1e5, -1e5]
+    _ax = None
 
-    def __init__(self, colormap: str = "viridis") -> None:
-
-        # generate the figure and axis
-        fig, ax = plt.subplots(1, 1, dpi=300)
-        ax.set_axis_off()  # remove all axes
-        ax.autoscale_view("tight")
+    def __init__(
+        self,
+        colormap="viridis",
+        hover_offset_x=0.02,
+        hover_offset_y=0.02,
+    ) -> None:
+        super().__init__(
+            hover_offset_x=hover_offset_x,
+            hover_offset_y=hover_offset_y,
+        )
+        self._ax = self._fig.add_subplot(1, 1, 1)
+        self._ax.set_axis_off()
+        self._ax.autoscale_view("tight")
 
         # get the artist and its colorbar
         dt = np.atleast_2d(np.linspace(0, 1, 100))
         dt = (dt.T @ dt) * 50
-        art = ax.imshow(dt, cmap=colormap, aspect=1)
-
-        # store the data
-        super().__init__(fig)
-        self.axis = ax
-        self.add_artist(artist=art, name="image")
+        self._artists["image"] = self._ax.imshow(
+            dt,
+            cmap=colormap,
+            aspect=1,
+        )
+        self.add_artist(artist=self._artists["image"], name="image")
 
         # add the colorbar
-        cb = fig.colorbar(
-            art,
-            ax=ax,
+        self.colorbar = self._fig.colorbar(
+            self._artists["image"],
+            ax=self._ax,
             location="bottom",
             anchor=(0.5, 1.0),
             shrink=0.66,
@@ -920,13 +930,17 @@ class ThermalImageWidget(FigureWidget):
             pad=0.05,
             orientation="horizontal",
         )
-        cb.minorticks_on()
-        self.colorbar = cb
+        self.colorbar.minorticks_on()
 
         # create the hover mask
         self.hover_widget.add_label("x", "", 0)
         self.hover_widget.add_label("y", "", 0)
         self.hover_widget.add_label("temperature", "°C", 1)
+
+        # make transparent background
+        self.figure.patch.set_facecolor("None")
+        self._ax.patch.set_alpha(0)
+        self.setStyleSheet("background-color:transparent;")
 
     def update_view(self, data: np.ndarray, force: bool = False) -> None:
         """
@@ -948,9 +962,9 @@ class ThermalImageWidget(FigureWidget):
         assert data.ndim == 2, txt
 
         # update the image data
-        self.artists["image"].set_data(data)
+        self._artists["image"].set_data(data)
         ext = [0, data.shape[1], data.shape[0], 0]
-        self.artists["image"].set_extent(ext)
+        self._artists["image"].set_extent(ext)
 
         # update the colorbar data
         if np.min(data) < self.bounds[0] or force:
@@ -970,7 +984,7 @@ class ThermalImageWidget(FigureWidget):
 
             # adjust the color normalization of the image
             norm = plc.Normalize(*self.bounds)
-            self.artists["image"].set_norm(norm)
+            self._artists["image"].set_norm(norm)
 
         # resize if appropriate
         new_shape = self.data.shape[0] != data.shape[0]
@@ -1159,7 +1173,7 @@ class LeptonWidget(qtw.QWidget):
         fps = 0 if toc == tic else (1 / (toc - tic))
         self.status_bar.setText("FPS: {:0.1f}".format(fps))
 
-    def __init__(self) -> None:
+    def __init__(self, colormap="viridis") -> None:
         """
         constructor
         """
@@ -1200,15 +1214,15 @@ class LeptonWidget(qtw.QWidget):
         recording_box = self._create_box("Data recording", self.recording_pane)
 
         # setup the options panel
-        self.opt_pane = qtw.QWidget()
+        opt_pane = qtw.QWidget()
         opt_layout = qtw.QGridLayout()
         opt_layout.setSpacing(2)
         opt_layout.setContentsMargins(0, 0, 0, 0)
         opt_layout.addWidget(freq_box, 0, 0)
-        opt_layout.addWidget(rotation_box, 0, 0)
-        opt_layout.addWidget(recording_box, 0, 0)
-        self.opt_pane.setLayout(opt_layout)
-        self.opt_pane.setFixedHeight(int(round(self._size * 1.5)))
+        opt_layout.addWidget(rotation_box, 0, 1)
+        opt_layout.addWidget(recording_box, 0, 2)
+        opt_pane.setLayout(opt_layout)
+        opt_pane.setFixedHeight(int(round(self._size * 1.5)))
 
         # thermal image
         self.thermal_image = ThermalImageWidget()
@@ -1226,7 +1240,7 @@ class LeptonWidget(qtw.QWidget):
         layout.setSpacing(2)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.thermal_image)
-        layout.addWidget(self.opt_pane)
+        layout.addWidget(opt_pane)
         layout.addWidget(self.status_bar)
         self.setLayout(layout)
         icon = os.path.sep.join([self.path, "_contents", "main.png"])
