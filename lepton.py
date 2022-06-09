@@ -1158,6 +1158,7 @@ class LeptonWidget(qtw.QWidget):
             msgBox.setWindowTitle("ERROR")
             msgBox.setStandardButtons(qtw.QMessageBox.Ok)
             msgBox.exec()
+        self.device.capture(save=False)
         self.start()
 
     def update_view(self) -> None:
