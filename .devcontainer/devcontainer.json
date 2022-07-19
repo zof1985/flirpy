@@ -33,7 +33,12 @@
 			// Add the IDs of extensions you want installed when the container is created.
 			"extensions": [
 				"ms-python.python",
-				"ms-python.vscode-pylance"
+				"ms-python.vscode-pylance",
+				"ms-azuretools.vscode-docker",
+				"ms-vscode.powershell",
+				"VisualStudioExptTeam.vscodeintellicode",
+				"VisualStudioExptTeam.intellicode-api-usage-examples",
+				"aaron-bond.better-comments"
 			]
 		}
 	},
