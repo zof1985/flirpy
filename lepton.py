@@ -11,6 +11,7 @@ import PySide2.QtCore as qtc
 import PySide2.QtGui as qtg
 import numpy as np
 import matplotlib
+import sys
 
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
@@ -1254,3 +1255,16 @@ class LeptonWidget(qtw.QWidget):
         self.timer = qtc.QTimer()
         self.timer.timeout.connect(self.update_view)
         self.update_frequency()
+
+
+if __name__ == "__main__":
+
+    # highdpi scaling
+    qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, True)
+    qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, True)
+
+    # app generation
+    app = qtw.QApplication(sys.argv)
+    camera = LeptonWidget()
+    camera.show()
+    sys.exit(app.exec_())
