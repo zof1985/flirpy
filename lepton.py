@@ -4,37 +4,24 @@ from typing import Tuple
 from scipy import ndimage
 from datetime import datetime
 from IR16Filters import IR16Capture, NewBytesFrameEvent
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 
-import PySide2.QtWidgets as qtw
-import PySide2.QtCore as qtc
-import PySide2.QtGui as qtg
+import qimage2ndarray
+import PyQt5.QtWidgets as qtw
+import PyQt5.QtCore as qtc
+import PyQt5.QtGui as qtg
 import numpy as np
-import matplotlib
-import sys
-
-matplotlib.use("Qt5Agg")
-import matplotlib.pyplot as plt
-import matplotlib.colors as plc
 import threading
 import h5py
 import json
 import time
+import cv2
 import os
 
-# default options for matplotlib
-plt.rc("font", size=3)  # controls default text sizes
-plt.rc("axes", titlesize=3)  # fontsize of the axes title
-plt.rc("axes", labelsize=3)  # fontsize of the x and y labels
-plt.rc("xtick", labelsize=3)  # fontsize of the x tick labels
-plt.rc("ytick", labelsize=3)  # fontsize of the y tick labels
-plt.rc("legend", fontsize=3)  # legend fontsize
-plt.rc("figure", titlesize=3)  # fontsize of the figure title
-plt.rc("figure", autolayout=True)
+# default font
 font = qtg.QFont("Arial", 12)
 
 
-def get_QIcon(path, size=40):
+def get_QIcon(path, size=40) -> qtg.QIcon:
     """
     return a QIcon with the required size from file.
 
@@ -79,7 +66,7 @@ class LeptonCamera:
     _last = None
     _dt = 200
     _angle = 0
-    _sampling_frequency = 5
+    _sampling_frequency = 8.5
 
     @staticmethod
     def time_format():
@@ -209,7 +196,7 @@ class LeptonCamera:
         self._path = os.path.sep.join(__file__.split(os.path.sep)[:-4])
 
         # set the sampling frequency
-        self.set_sampling_frequency(5)
+        self.set_sampling_frequency(8.5)
 
         # set the rotation angle
         self.set_angle(0)
@@ -504,8 +491,8 @@ class RecordingWidget(qtw.QWidget):
     start_time = None
     timer = None
     label_format = "{:02d}:{:02d}:{:02d}"
-    started = qtc.Signal()
-    stopped = qtc.Signal()
+    started = qtc.pyqtSignal()
+    stopped = qtc.pyqtSignal()
     _size = 50
 
     def __init__(self):
@@ -689,16 +676,13 @@ class HoverWidget(qtw.QWidget):
         return ("{:0." + str(digits) + "f} {}{}").format(v, letter, unit)
 
 
-class FigureWidget(FigureCanvasQTAgg):
+class ThermalImageWidget(qtw.QLabel):
     """
     Generate a QWidget incorporating a matplotlib Figure.
     Animated artists can be provided to ensure optimal performances.
 
     Parameters
     ----------
-    figure: matplotlib Figure
-        the figure to be rendered.
-
     hover_offset_x: float
         the percentage of the screen width that offsets the hover with respect
         to the position of the mouse.
@@ -706,125 +690,92 @@ class FigureWidget(FigureCanvasQTAgg):
     hover_offset_y: float
         the percentage of the screen height that offsets the hover with respect
         to the position of the mouse.
+
+    colormap: cv2.COLORMAP
+        the colormap to be applied
     """
 
     # class variables
-    _artists = {}
-    hover_widget = None
-    _background = None
-    _fig = None
-    _cid = None
-    _res = None
-    _ax_in = None
-    _ax_out = None
-    _ax_move = None
-    hover_offset_x = None
-    hover_offset_y = None
-    event = None
+    hover = None
+    hover_offset_x_perc = None
+    hover_offset_y_perc = None
+    colormap = None
+    data = None
 
-    def __init__(self, hover_offset_x=0.02, hover_offset_y=0.02):
-        fig = plt.figure(dpi=300)
-        super().__init__(fig)
-        self._fig = fig
-        self._background = None
-        self._res = self.figure.canvas.mpl_connect(
-            "resize_event",
-            self._resize_event,
-        )
-        self._cid = self.figure.canvas.mpl_connect(
-            "draw_event",
-            self.on_draw,
-        )
-
-        # mouse tracking
-        self._ax_in = self.figure.canvas.mpl_connect(
-            "axes_enter_event",
-            self.enter_event,
-        )
-        self._ax_out = self.figure.canvas.mpl_connect(
-            "axes_leave_event",
-            self.leave_event,
-        )
-        self._ax_move = self.figure.canvas.mpl_connect(
-            "motion_notify_event",
-            self.move_event,
-        )
-
-        # create the hover mask
-        self.hover_widget = HoverWidget()
-        self.hover_widget.setVisible(False)
-        height = self.frameSize().height()
-        width = self.frameSize().width()
-        self.hover_offset_x = int(round(hover_offset_x * width))
-        self.hover_offset_y = int(round(hover_offset_y * height))
-
-    def add_artist(
+    def __init__(
         self,
-        artist: matplotlib.artist.Artist,
-        name: str,
-    ) -> None:
+        hover_offset_x=0.02,
+        hover_offset_y=0.02,
+        colormap=cv2.COLORMAP_JET,
+    ):
+        super().__init__()
+        self.hover = HoverWidget()
+        self.hover.add_label("x", "", 0)
+        self.hover.add_label("y", "", 0)
+        self.hover.add_label("temperature", "°C", 1)
+        self.hover.setVisible(False)
+        self.hover_offset_x_perc = hover_offset_x
+        self.hover_offset_y_perc = hover_offset_y
+        self.colormap = colormap
+        self.setMouseTracking(True)
+
+    def enterEvent(self, event=None):
         """
-        add a new (animated) artist to the object.
-
-        Parameters
-        ----------
-        artist: matplotlib.artist.Artist
-            the artist to be added
-
-        name: str
-            the name of the axis
+        override enterEvent.
         """
-        txt = "artist must be a matplotlib.artist.Artist."
-        assert isinstance(artist, matplotlib.artist.Artist), txt
-        assert isinstance(name, str), "name must be a str."
-        self._artists[name] = artist
+        self.hover.setVisible(True)
+        self.update_hover(event)
 
-    def on_draw(self, event):
+    def mouseMoveEvent(self, event=None):
         """
-        Callback to register with 'draw_event'.
+        override moveEvent.
         """
-        if event is not None:
-            if event.canvas != self.figure.canvas:
-                raise RuntimeError
-        bbox = self.figure.canvas.figure.bbox
-        self._background = self.figure.canvas.copy_from_bbox(bbox)
-        self._draw_animated()
+        self.update_hover(event)
 
-    def _draw_animated(self):
+    def leaveEvent(self, event=None):
         """
-        Draw all of the animated artists.
+        override leaveEvent.
         """
-        for a in self._artists.values():
-            self.figure.canvas.figure.draw_artist(a)
+        self.hover.setVisible(False)
 
-    def update_view(self):
+    def _adjust_view(self):
         """
-        Update the screen with animated artists.
+        private method used to resize the widget
         """
+        if self.data is not None:
+            if self.pixmap() is not None:
+                self.pixmap().scaled(*self.data.shape)
 
-        # update the background if required
-        if self._background is None:
-            self.on_draw(None)
+            # get the target width
+            screen_size = qtw.QDesktopWidget().screenGeometry(-1).size()
+            max_w = screen_size.width()
+            min_w = self.parent().minimumSizeHint().width()
+            new_w = self.sizeHint().width()
+            w = min(max_w, max(min_w, new_w))
 
-        else:
+            # get the target height
+            ratio = self.data.shape[0] / self.data.shape[1]
+            new_h = int(round(w / ratio))
+            max_h = screen_size.height()
+            max_h -= (self.parent().size().height() - self.size().height())
+            h = min(new_h, max_h)
 
-            # restore the background
-            self.figure.canvas.restore_region(self._background)
+            # convert the data into image
+            img = self.data - np.min(self.data)
+            img /= (np.max(self.data) - np.min(self.data))
+            img = np.expand_dims(img * 255, 2).astype(np.uint8)
+            img = np.concatenate([img, img, img], axis=2)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.applyColorMap(img, self.colormap)
 
-            # draw all of the animated artists
-            self._draw_animated()
+            # adjust the image shape
+            if new_h <= max_h:
+                img = qimage2ndarray.array2qimage(img).scaledToWidth(w)
+            else:
+                img = qimage2ndarray.array2qimage(img).scaledToHeight(h)
+            self.setPixmap(qtg.QPixmap.fromImage(img))
 
-            # update the GUI state
-            self.figure.canvas.blit(self.figure.canvas.figure.bbox)
-
-        # let the GUI event loop process anything it has to do
-        self.figure.canvas.flush_events()
-
-    def update_hover(
-        self,
-        event: matplotlib.backend_bases.Event,
-        **values,
-    ) -> None:
+    def update_hover(self, event=None):
         """
         update the hover position.
 
@@ -836,189 +787,49 @@ class FigureWidget(FigureCanvasQTAgg):
         values: any
             the values to be used for updating the hover.
         """
-        if event is None:
-            self.leave_event()
-        else:
-            ymax = event.canvas._lastKey[1]
-            y = ymax - event.y + self.hover_offset_y
-            x = event.x + self.hover_offset_x
+        if self.data is not None:
+            x_img = self.size().width()
+            y_img = self.size().height()
+            x_data = int((event.x() // (x_img / self.data.shape[1])))
+            y_data = int(event.y() // (y_img / self.data.shape[0]))
+            v_data = float(self.data[y_data, x_data])
+            y = event.y() + int(round(self.hover_offset_x_perc * x_img))
+            x = event.x() + int(round(self.hover_offset_y_perc * y_img))
             pnt = self.mapToGlobal(qtc.QPoint(x, y))
-            self.hover_widget.move(pnt.x(), pnt.y())
-            self.hover_widget.update(**values)
-            self.event = event
+            self.hover.move(pnt.x(), pnt.y())
+            self.hover.update(x=x, y=y, temperature=v_data)
 
-    def _resize_event(self, event=None):
+    def update_view(self, data=None):
         """
-        handle object resizing.
-        """
-        self.figure.tight_layout()
-        self.figure.canvas.draw()
-
-    def enter_event(self, event=None):
-        """
-        handle the entry of the mouse in the area.
-        """
-        self.move_event(event)
-
-    def leave_event(self, event=None):
-        """
-        handle the leaving of the mouse from the area.
-        """
-        self.hover_widget.setVisible(False)
-        self.event = None
-
-    def move_event(self, event=None):
-        """
-        handle the movement of the mouse over the area.
-        """
-        n = len(self.hover_widget.labels)
-        if not self.hover_widget.isVisible() and n > 0:
-            self.hover_widget.setVisible(True)
-        self.update_hover(event)
-
-
-class ThermalImageWidget(FigureWidget):
-    """
-    defines a thermal image object.
-
-    Parameters
-    ----------
-    colormap: str
-        any valid matplotlib colormap.
-    """
-
-    # class variables
-    _old = time.time()
-    data = np.atleast_2d([])
-    event = None
-    colorbar = None
-    _colorbar_formatter = "{:0.1f}°C"
-    bounds = [1e5, -1e5]
-    _ax = None
-
-    def __init__(
-        self,
-        colormap="viridis",
-        hover_offset_x=0.02,
-        hover_offset_y=0.02,
-    ) -> None:
-        super().__init__(
-            hover_offset_x=hover_offset_x,
-            hover_offset_y=hover_offset_y,
-        )
-        self._ax = self._fig.add_subplot(1, 1, 1)
-        self._ax.set_axis_off()
-        self._ax.autoscale_view("tight")
-
-        # get the artist and its colorbar
-        dt = np.atleast_2d(np.linspace(0, 1, 100))
-        dt = (dt.T @ dt) * 50
-        self._artists["image"] = self._ax.imshow(
-            dt,
-            cmap=colormap,
-            aspect=1,
-        )
-        self.add_artist(artist=self._artists["image"], name="image")
-
-        # add the colorbar
-        self.colorbar = self._fig.colorbar(
-            self._artists["image"],
-            ax=self._ax,
-            location="bottom",
-            anchor=(0.5, 1.0),
-            shrink=0.66,
-            fraction=0.075,
-            pad=0.05,
-            orientation="horizontal",
-        )
-        self.colorbar.minorticks_on()
-
-        # create the hover mask
-        self.hover_widget.add_label("x", "", 0)
-        self.hover_widget.add_label("y", "", 0)
-        self.hover_widget.add_label("temperature", "°C", 1)
-
-        # make transparent background
-        self.figure.patch.set_facecolor("None")
-        self._ax.patch.set_alpha(0)
-        self.setStyleSheet("background-color:transparent;")
-
-    def update_view(self, data: np.ndarray, force: bool = False) -> None:
-        """
-        render the provided data.
+        update the image displayed by the object.
 
         Parameters
         ----------
-        data: 2D numpy.ndarray
-            the matrix containing the temperatures collected on one sample.
-
-        force: bool
-            if True, force the redraw of the colorbar and perform a new color
-            normalization.
-
+        data: numpy 2D array
+            the data to be displayed.
         """
-        # check the entries
-        txt = "data must be a 2D array."
-        assert isinstance(data, np.ndarray), txt
-        assert data.ndim == 2, txt
-
-        # update the image data
-        self._artists["image"].set_data(data)
-        ext = [0, data.shape[1], data.shape[0], 0]
-        self._artists["image"].set_extent(ext)
-
-        # update the colorbar data
-        if np.min(data) < self.bounds[0] or force:
-            self.bounds[0] = np.min(data)
-        if np.max(data) > self.bounds[1] or force:
-            self.bounds[1] = np.max(data)
-        new_min = self.colorbar.vmin > self.bounds[0]
-        new_max = self.colorbar.vmax < self.bounds[1]
-        if new_min or new_max or force:
-
-            # update the bar
-            self.colorbar.set_ticks(self.bounds)
-            labels = [self._colorbar_formatter.format(i) for i in self.bounds]
-            self.colorbar.set_ticklabels(labels)
-            self.colorbar.vmin = self.bounds[0]
-            self.colorbar.vmax = self.bounds[1]
-
-            # adjust the color normalization of the image
-            norm = plc.Normalize(*self.bounds)
-            self._artists["image"].set_norm(norm)
-
-        # resize if appropriate
-        new_shape = self.data.shape[0] != data.shape[0]
-        new_shape |= self.data.shape[1] != data.shape[1]
-        if new_shape:
-            self._resize_event(None)
         self.data = data
-
-        # update the view and the hover
-        super().update_view()
-        self.update_hover(self.event)
-
-    def update_hover(self, event=None):
-        """
-        update the hover as required.
-        """
-        if event is not None:
-            if event.xdata is not None and event.ydata is not None:
-                x = int(round(event.xdata))
-                y = int(round(event.ydata))
-                t = float(self.data[y, x])
-                labels = {"x": x, "y": y, "temperature": t}
-                super().update_hover(event, **labels)
-            else:
-                self.leave_event()
-        else:
-            self.leave_event()
+        self._adjust_view()
 
 
-class LeptonWidget(qtw.QWidget):
+class LeptonWidget(qtw.QMainWindow):
     """
     Initialize a PySide2 widget capable of communicating to
     an pure thermal device equipped with a lepton 3.5 sensor.
+
+    Parameters
+    ----------
+
+    hover_offset_x: float
+        the percentage of the screen width that offsets the hover with respect
+        to the position of the mouse.
+
+    hover_offset_y: float
+        the percentage of the screen height that offsets the hover with respect
+        to the position of the mouse.
+
+    colormap: str
+        the colormap to be applied
     """
 
     # private variables
@@ -1027,8 +838,8 @@ class LeptonWidget(qtw.QWidget):
     zoom_spinbox = None
     frequency_spinbox = None
     thermal_image = None
+    fps_label = None
     rotation_button = None
-    status_bar = None
     recording_pane = None
     opt_pane = None
     device = None
@@ -1086,9 +897,10 @@ class LeptonWidget(qtw.QWidget):
         """
         set the sampling frequency.
         """
+        self.device.interrupt()
         fs = self.frequency_spinbox.value()
         self.device.set_sampling_frequency(fs)
-        self.device.interrupt()
+        self.device.capture(save=False)
         self.start()
 
     def rotate(self) -> None:
@@ -1096,6 +908,7 @@ class LeptonWidget(qtw.QWidget):
         set the rotation angle.
         """
         self.device.set_angle(self.device.angle + 90)
+        self.resizeEvent()
 
     def rec_start(self):
         """
@@ -1120,7 +933,7 @@ class LeptonWidget(qtw.QWidget):
             path, ext = qtw.QFileDialog.getSaveFileName(
                 parent=self,
                 filter=file_filters,
-                dir=self.path,
+                directory=self.path,
                 options=options,
             )
 
@@ -1175,9 +988,19 @@ class LeptonWidget(qtw.QWidget):
             self.thermal_image.update_view(self.device._last[1])
         toc = time.time()
         fps = 0 if toc == tic else (1 / (toc - tic))
-        self.status_bar.setText("FPS: {:0.1f}".format(fps))
+        self.fps_label.setText("FPS: {:0.1f}".format(fps))
 
-    def __init__(self, colormap="viridis") -> None:
+    def resizeEvent(self, event=None):
+        w = self.thermal_image.sizeHint().width()
+        h = self.sizeHint().height()
+        self.resize(w, h)
+
+    def __init__(
+        self,
+        hover_offset_x=0.02,
+        hover_offset_y=0.02,
+        colormap=cv2.COLORMAP_JET,
+    ) -> None:
         """
         constructor
         """
@@ -1195,8 +1018,8 @@ class LeptonWidget(qtw.QWidget):
         self.frequency_spinbox.setDecimals(1)
         self.frequency_spinbox.setMinimum(1.0)
         self.frequency_spinbox.setSingleStep(0.1)
-        self.frequency_spinbox.setMaximum(8.7)
-        self.frequency_spinbox.setValue(5.0)
+        self.frequency_spinbox.setMaximum(8.5)
+        self.frequency_spinbox.setValue(8.5)
         self.frequency_spinbox.valueChanged.connect(self.update_frequency)
         freq_box = self._create_box("Frequency (Hz)", self.frequency_spinbox)
 
@@ -1229,15 +1052,11 @@ class LeptonWidget(qtw.QWidget):
         opt_pane.setFixedHeight(int(round(self._size * 1.5)))
 
         # thermal image
-        self.thermal_image = ThermalImageWidget()
-
-        # status bar
-        self.status_bar = qtw.QLabel("")
-        size = font.pixelSize()
-        family = font.family()
-        self.status_bar.setFont(qtg.QFont(family, size // 2))
-        self.status_bar.setAlignment(qtc.Qt.AlignVCenter | qtc.Qt.AlignLeft)
-        self.status_bar.setFixedHeight(self.status_bar.sizeHint().height())
+        self.thermal_image = ThermalImageWidget(
+            hover_offset_x=hover_offset_x,
+            hover_offset_y=hover_offset_y,
+            colormap=colormap,
+        )
 
         # widget layout
         layout = qtw.QVBoxLayout()
@@ -1245,8 +1064,18 @@ class LeptonWidget(qtw.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.thermal_image)
         layout.addWidget(opt_pane)
-        layout.addWidget(self.status_bar)
-        self.setLayout(layout)
+        central_widget = qtw.QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+        # status bar
+        size = font.pixelSize()
+        family = font.family()
+        self.fps_label = qtw.QLabel()
+        self.fps_label.setFont(qtg.QFont(family, size // 2))
+        self.statusBar().addPermanentWidget(self.fps_label)
+
+        # icon and title
         icon = os.path.sep.join([self.path, "_contents", "main.png"])
         self.setWindowIcon(get_QIcon(icon, self._size))
         self.setWindowTitle("LeptonWidget")
@@ -1256,15 +1085,5 @@ class LeptonWidget(qtw.QWidget):
         self.timer.timeout.connect(self.update_view)
         self.update_frequency()
 
-
-if __name__ == "__main__":
-
-    # highdpi scaling
-    qtw.QApplication.setAttribute(qtc.Qt.AA_EnableHighDpiScaling, True)
-    qtw.QApplication.setAttribute(qtc.Qt.AA_UseHighDpiPixmaps, True)
-
-    # app generation
-    app = qtw.QApplication(sys.argv)
-    camera = LeptonWidget()
-    camera.show()
-    sys.exit(app.exec_())
+        # avoid resizing
+        self.statusBar().setSizeGripEnabled(False)
