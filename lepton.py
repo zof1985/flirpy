@@ -1,6 +1,6 @@
 # imports
 from Lepton import CCI
-from typing import Tuple
+from typing import Any, Tuple
 from scipy import ndimage
 from datetime import datetime
 from IR16Filters import IR16Capture, NewBytesFrameEvent
@@ -69,15 +69,15 @@ class LeptonCamera:
     _sampling_frequency = 8.5
 
     @staticmethod
-    def time_format():
+    def time_format()-> str:
         return "%H:%M:%S.%f"
 
     @staticmethod
-    def date_format():
+    def date_format()-> str:
         return "%Y-%b-%d"
 
     @staticmethod
-    def datetime_format():
+    def datetime_format() -> str:
         return LeptonCamera.date_format() + " " + LeptonCamera.time_format()
 
     @staticmethod
@@ -117,7 +117,7 @@ class LeptonCamera:
         assert os.path.exists(filename), "{} does not exists.".format(filename)
 
         # timestamps parsing method
-        def to_datetime(txt):
+        def to_datetime(txt) -> datetime:
             return datetime.strptime(txt, LeptonCamera.datetime_format())
 
         # obtain the readed objects
@@ -256,7 +256,7 @@ class LeptonCamera:
             self._first = self._last
             self._data[self._last[0]] = self._last[1]
 
-            def store():
+            def store() -> None:
                 old = list(self._data.keys())[-1]
                 processing_time = 0
                 n = 0
@@ -278,7 +278,7 @@ class LeptonCamera:
         # continue reading until a stopping criterion is met
         if seconds is not None:
 
-            def stop_reading(time):
+            def stop_reading(time) -> None:
                 while self._first is None:
                     pass
                 dt = 0
@@ -291,7 +291,7 @@ class LeptonCamera:
 
         elif n_frames is not None:
 
-            def stop_reading(n_frames):
+            def stop_reading(n_frames) -> None:
                 while len(self._data) < n_frames:
                     pass
                 self.interrupt()
@@ -471,12 +471,12 @@ class Runnable(qtc.QRunnable):
     fun = None
     kwargs = {}
 
-    def __init__(self, fun, **kwargs):
+    def __init__(self, fun, **kwargs) -> None:
         super().__init__()
         self.fun = fun
         self.kwargs = kwargs
 
-    def run(self):
+    def run(self) -> Any:
         return self.fun(**self.kwargs)
 
 
@@ -495,7 +495,7 @@ class RecordingWidget(qtw.QWidget):
     stopped = qtc.pyqtSignal()
     _size = 50
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         # generate the output layout
@@ -529,7 +529,7 @@ class RecordingWidget(qtw.QWidget):
         self.timer = qtc.QTimer()
         self.timer.timeout.connect(self.update_time)
 
-    def update_time(self):
+    def update_time(self) -> None:
         """
         timer function
         """
@@ -543,7 +543,7 @@ class RecordingWidget(qtw.QWidget):
         else:
             self.label.setText(self.label_format.format(0, 0, 0))
 
-    def clicked(self):
+    def clicked(self) -> None:
         """
         function handling the clicking of the recording button.
         """
@@ -568,7 +568,7 @@ class HoverWidget(qtw.QWidget):
     artists = {}
     layout = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.layout = qtw.QGridLayout()
         self.layout.setHorizontalSpacing(20)
@@ -582,7 +582,7 @@ class HoverWidget(qtw.QWidget):
         name: str,
         unit: str,
         digits: int,
-    ):
+    ) -> None:
         """
         add a new label to the hover.
 
@@ -616,7 +616,7 @@ class HoverWidget(qtw.QWidget):
         self.setLayout(self.layout)
         self.formatters[name] = lambda x: self.unit_formatter(x, unit, digits)
 
-    def update(self, **labels):
+    def update(self, **labels) -> None:
         """
         update the hover parameters.
 
@@ -633,7 +633,7 @@ class HoverWidget(qtw.QWidget):
         x: Tuple[int, float],
         unit: str = "",
         digits: int = 1,
-    ):
+    ) -> str:
         """
         return the letter linked to the order of magnitude of x.
 
@@ -707,7 +707,7 @@ class ThermalImageWidget(qtw.QLabel):
         hover_offset_x=0.02,
         hover_offset_y=0.02,
         colormap=cv2.COLORMAP_JET,
-    ):
+    ) -> None:
         super().__init__()
         self.hover = HoverWidget()
         self.hover.add_label("x", "", 0)
@@ -719,26 +719,26 @@ class ThermalImageWidget(qtw.QLabel):
         self.colormap = colormap
         self.setMouseTracking(True)
 
-    def enterEvent(self, event=None):
+    def enterEvent(self, event=None) -> None:
         """
         override enterEvent.
         """
         self.hover.setVisible(True)
         self.update_hover(event)
 
-    def mouseMoveEvent(self, event=None):
+    def mouseMoveEvent(self, event=None) -> None:
         """
         override moveEvent.
         """
         self.update_hover(event)
 
-    def leaveEvent(self, event=None):
+    def leaveEvent(self, event=None) -> None:
         """
         override leaveEvent.
         """
         self.hover.setVisible(False)
 
-    def _adjust_view(self):
+    def _adjust_view(self) -> None:
         """
         private method used to resize the widget
         """
@@ -775,7 +775,7 @@ class ThermalImageWidget(qtw.QLabel):
                 img = qimage2ndarray.array2qimage(img).scaledToHeight(h)
             self.setPixmap(qtg.QPixmap.fromImage(img))
 
-    def update_hover(self, event=None):
+    def update_hover(self, event=None) -> None:
         """
         update the hover position.
 
@@ -799,7 +799,7 @@ class ThermalImageWidget(qtw.QLabel):
             self.hover.move(pnt.x(), pnt.y())
             self.hover.update(x=x, y=y, temperature=v_data)
 
-    def update_view(self, data=None):
+    def update_view(self, data=None) -> None:
         """
         update the image displayed by the object.
 
@@ -844,7 +844,7 @@ class LeptonWidget(qtw.QMainWindow):
     opt_pane = None
     device = None
 
-    def _create_box(self, title, obj):
+    def _create_box(self, title, obj) -> qtw.QGroupBox:
         """
         create a groupbox with the given title and incorporating obj.
 
@@ -875,7 +875,7 @@ class LeptonWidget(qtw.QMainWindow):
         pane.setFont(font)
         return pane
 
-    def start(self):
+    def start(self) -> None:
         """
         start the timer.
         """
@@ -885,7 +885,7 @@ class LeptonWidget(qtw.QMainWindow):
         except Exception:
             pass
 
-    def show(self):
+    def show(self) -> None:
         """
         make the widget visible.
         """
@@ -910,14 +910,14 @@ class LeptonWidget(qtw.QMainWindow):
         self.device.set_angle(self.device.angle + 90)
         self.resizeEvent()
 
-    def rec_start(self):
+    def rec_start(self) -> None:
         """
         function handling what happens at the start of the recording.
         """
         self.device.interrupt()
         self.device.capture(save=True)
 
-    def rec_stop(self):
+    def rec_stop(self) -> None:
         """
         function handling what happens at the stop of the recording.
         """
@@ -990,7 +990,7 @@ class LeptonWidget(qtw.QMainWindow):
         fps = 0 if toc == tic else (1 / (toc - tic))
         self.fps_label.setText("FPS: {:0.1f}".format(fps))
 
-    def resizeEvent(self, event=None):
+    def resizeEvent(self, event=None) -> None:
         w = self.thermal_image.sizeHint().width()
         h = self.sizeHint().height()
         self.resize(w, h)
