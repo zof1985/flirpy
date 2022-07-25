@@ -132,3 +132,4 @@ dmypy.json
 /.vscode
 test.py
 .gitignore
+*.code-workspace
