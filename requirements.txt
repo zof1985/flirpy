@@ -1,5 +1,5 @@
 pythonnet
-PySide2
+PyQt5
 qimage2ndarray
 numpy
 h5py
